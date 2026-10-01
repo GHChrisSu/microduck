@@ -582,7 +582,8 @@ sometimes never launches a leg hard enough to pivot, and the standing network ro
 again for as long as nobody intervenes, where Start, a moment at the home pose and Start again
 almost always works. The predictor cannot see this, because it refuses a robot that is already
 down: that refusal is what stops a stand-up's rocking reading as a fall. So a separate watch
-times the standing network working at a fallen robot. Past `limp_fall_standup_timeout_ms` it
+times the gait (the standing network, or velstand standing at zero command) working at a
+fallen robot. Past `limp_fall_standup_timeout_ms` it
 reruns the sequence (limp, settle, pose, hand back), up to `limp_fall_standup_retries` times,
 and then disables the policy, which is Start-off: home pose, no more grinding, and the next try
 is a person's. Success means upright for a full second rather than the verdict clearing, since one

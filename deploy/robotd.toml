@@ -279,9 +279,9 @@ mode = "walk"
 # A stand-up that is not getting anywhere. From its back the robot sometimes never launches a
 # leg hard enough to pivot, and the standing network rocks and tries again for as long as
 # nobody steps in — where Start, a moment to settle at the home pose, and Start again almost
-# always works. This does that: if the standing network has been driving a fallen robot for
-# `limp_fall_standup_timeout_ms` without it getting up, the sequence above reruns — limp,
-# settle, pose, hand back. Getting up counts once the robot has been upright for a second, so a
+# always works. This does that: if the gait (the standing network, or velstand) has been
+# driving a fallen robot for `limp_fall_standup_timeout_ms` without it getting up, the
+# sequence above reruns — limp, settle, pose, hand back. Getting up counts once the robot has been upright for a second, so a
 # pivot that tips past vertical and falls back is still a failure. After
 # `limp_fall_standup_retries` the policy is disabled instead: the robot goes to the home pose
 # and stops grinding at the floor, and Start tries again by hand. 0 turns the retry off.

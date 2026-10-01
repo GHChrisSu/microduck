@@ -234,8 +234,8 @@ enum Standup {
 }
 
 impl StandupWatch {
-    /// One tick. `attempting` is the standing network driving, with nothing else — a skill, a
-    /// sit, a shutdown — owning the robot; `fallen` is the debounced verdict.
+    /// One tick. `attempting` is a gait driving — the standing network, or velstand in the walk
+    /// slot — with nothing else (a skill, a sit, a shutdown) owning the robot; `fallen` is the debounced verdict.
     fn observe(
         &mut self,
         now: Instant,
@@ -2691,8 +2691,14 @@ async fn control_loop<T: RobotIo>(
                         let attempting = was_driving
                             && shutdown_sit.is_none()
                             && !powered_off
+                            // Whichever gait is doing the standing up: a separate standing
+                            // network, or velstand — the walk slot standing at zero command,
+                            // which reports as `Walk`. That is the default config, and checking
+                            // for `Stand` alone meant this never fired on it.
                             && controller.as_ref().is_some_and(|c| {
-                                !c.busy() && !c.is_sitting() && c.driving() == Some(Driving::Stand)
+                                !c.busy()
+                                    && !c.is_sitting()
+                                    && matches!(c.driving(), Some(Driving::Stand | Driving::Walk))
                             });
                         match standup.observe(
                             tick_start,
