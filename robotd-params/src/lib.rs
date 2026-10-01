@@ -1729,6 +1729,16 @@ pub struct SafetyParams {
     /// Gain for that ramp. The joints have to actually travel across the floor, so it is
     /// not the limp gain; it is the softened standing gain rather than the walking one.
     pub limp_fall_pose_gain: u16,
+    /// How long the standing network may work at a fallen robot before the stand-up counts as
+    /// failed. A failure is the robot never launching far enough to pivot, rocking on its back
+    /// and trying again for as long as nobody intervenes; the answer is the one a person gives
+    /// with Start — let it settle, put it back in the home pose, hand it over again — so a failed
+    /// attempt reruns the limp-and-pose sequence above. `0` turns the retry off.
+    pub limp_fall_standup_timeout_ms: u64,
+    /// Retries before giving up. Giving up disables the policy, which returns the robot to the
+    /// home pose and stops it grinding at the floor: Start then tries again by hand. Reset by a
+    /// stand-up that holds, and by Start.
+    pub limp_fall_standup_retries: u32,
 }
 
 impl Default for PolicyParams {
@@ -1778,6 +1788,8 @@ impl Default for SafetyParams {
             limp_fall_max_ms: 1500,
             limp_fall_pose_ms: 600,
             limp_fall_pose_gain: 160,
+            limp_fall_standup_timeout_ms: 5000,
+            limp_fall_standup_retries: 3,
         }
     }
 }
@@ -3080,6 +3092,14 @@ mod tests {
         );
         assert_eq!(from_file.policy.resolved(), built_in.policy.resolved());
         assert_eq!(from_file.safety.limp_fall, built_in.safety.limp_fall);
+        assert_eq!(
+            from_file.safety.limp_fall_standup_timeout_ms,
+            built_in.safety.limp_fall_standup_timeout_ms
+        );
+        assert_eq!(
+            from_file.safety.limp_fall_standup_retries,
+            built_in.safety.limp_fall_standup_retries
+        );
         assert_eq!(
             from_file.safety.battery_empty_shutdown,
             built_in.safety.battery_empty_shutdown

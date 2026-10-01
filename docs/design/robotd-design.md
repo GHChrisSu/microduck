@@ -577,6 +577,18 @@ The tuning is the feature, and it is asymmetric: a false positive is a fall the 
 *caused*, which is worse than the stiff landing it was trying to avoid. The defaults sit
 deliberately on the late side.
 
+The same sequence is also the answer to a stand-up that fails. From its back the robot
+sometimes never launches a leg hard enough to pivot, and the standing network rocks and tries
+again for as long as nobody intervenes, where Start, a moment at the home pose and Start again
+almost always works. The predictor cannot see this, because it refuses a robot that is already
+down: that refusal is what stops a stand-up's rocking reading as a fall. So a separate watch
+times the standing network working at a fallen robot. Past `limp_fall_standup_timeout_ms` it
+reruns the sequence (limp, settle, pose, hand back), up to `limp_fall_standup_retries` times,
+and then disables the policy, which is Start-off: home pose, no more grinding, and the next try
+is a person's. Success means upright for a full second rather than the verdict clearing, since one
+upright sample clears the verdict and a failed pivot often tips past vertical on its way back
+down.
+
 A spent pack is the other thing that moves the robot without being asked: with
 `safety.battery_empty_shutdown` (on by default), reaching the empty floor on the smoothed
 voltage sits the robot down and powers the board off. The EMA moves over ~10 s, so a load sag

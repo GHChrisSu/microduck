@@ -197,6 +197,96 @@ impl Landing {
     }
 }
 
+/// How long a stand-up has to hold before it counts as having worked.
+///
+/// Not the fall verdict clearing: one upright sample clears that, and a stand-up that fails is
+/// often a pivot that tips past vertical and falls back. A second upright is a robot that got up.
+const STANDUP_UPRIGHT: Duration = Duration::from_secs(1);
+
+/// Watching the standing network for a stand-up that is not getting anywhere
+/// (`[safety] limp_fall_standup_timeout_ms`).
+///
+/// The failure it exists for: from its back, the robot sometimes never launches a leg hard
+/// enough to pivot, and the standing network rocks and tries again for as long as nobody steps
+/// in. What works is what a person does with Start — let it settle at the home pose, hand it
+/// over again — and that is the limp-fall sequence, so a failed stand-up reruns it.
+///
+/// The predictor cannot see this: it fires on a robot going *over*, and refuses a robot that is
+/// already down precisely so a stand-up's rocking is not mistaken for a fall.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct StandupWatch {
+    /// When the standing network began working at a fallen robot. `None` with no attempt on.
+    since: Option<Instant>,
+    /// How long the robot has been upright, towards [`STANDUP_UPRIGHT`].
+    upright_for: Duration,
+    /// Retries spent on this fall.
+    retries: u32,
+}
+
+/// What a [`StandupWatch`] tick asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Standup {
+    Nothing,
+    /// Rerun the limp-fall sequence. Carries which retry this is.
+    Retry(u32),
+    /// Out of retries: stop the policy, and leave the next attempt to a person.
+    GiveUp,
+}
+
+impl StandupWatch {
+    /// One tick. `attempting` is the standing network driving, with nothing else — a skill, a
+    /// sit, a shutdown — owning the robot; `fallen` is the debounced verdict.
+    fn observe(
+        &mut self,
+        now: Instant,
+        period: Duration,
+        attempting: bool,
+        fallen: bool,
+        timeout: Duration,
+        max_retries: u32,
+    ) -> Standup {
+        self.upright_for = if fallen {
+            Duration::ZERO
+        } else {
+            self.upright_for.saturating_add(period)
+        };
+        if self.upright_for >= STANDUP_UPRIGHT {
+            // Up, and staying up. Whatever was spent getting there is forgiven.
+            self.since = None;
+            self.retries = 0;
+            return Standup::Nothing;
+        }
+        if !attempting || timeout.is_zero() {
+            self.since = None;
+            return Standup::Nothing;
+        }
+        // An attempt starts on the floor. Upright-but-not-for-a-second is either a stand-up
+        // finishing or a pivot about to fall back, and both are already being timed if they
+        // started down.
+        let since = match self.since {
+            Some(since) => since,
+            None if fallen => *self.since.insert(now),
+            None => return Standup::Nothing,
+        };
+        if now.duration_since(since) < timeout {
+            return Standup::Nothing;
+        }
+        self.since = None;
+        if self.retries < max_retries {
+            self.retries += 1;
+            Standup::Retry(self.retries)
+        } else {
+            self.retries = 0;
+            Standup::GiveUp
+        }
+    }
+
+    /// Forget everything: a person took the robot back.
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 impl LimpFall {
     /// The interpolated pose target for this tick, or `None` once the ramp is done.
     ///
@@ -1914,6 +2004,8 @@ async fn control_loop<T: RobotIo>(
     let limp_fall_max = Duration::from_millis(params.safety.limp_fall_max_ms);
     let limp_fall_pose = Duration::from_millis(params.safety.limp_fall_pose_ms);
     let mut limp_fall = LimpFall::Idle;
+    let standup_timeout = Duration::from_millis(params.safety.limp_fall_standup_timeout_ms);
+    let mut standup = StandupWatch::default();
 
     // The voice, and the ear. Both optional equipment: a robot without a codec or a bank
     // walks identically — the player degrades to a debug line, and the mic worker is only
@@ -2587,6 +2679,53 @@ async fn control_loop<T: RobotIo>(
                         // progress rather than resuming it later against a robot that has
                         // moved on.
                         _ => falling.reset(),
+                    }
+
+                    // A robot already down, and a stand-up that is not working. The predictor
+                    // above refuses a fallen robot; this is the half of the answer for one.
+                    if !snapshot.enabled {
+                        // Start, or anything else that took the policy away: the human is
+                        // in charge, and the next attempt is theirs to count from.
+                        standup.reset();
+                    } else if limp_fall == LimpFall::Idle {
+                        let attempting = was_driving
+                            && shutdown_sit.is_none()
+                            && !powered_off
+                            && controller.as_ref().is_some_and(|c| {
+                                !c.busy() && !c.is_sitting() && c.driving() == Some(Driving::Stand)
+                            });
+                        match standup.observe(
+                            tick_start,
+                            period,
+                            attempting,
+                            safety.fallen(),
+                            standup_timeout,
+                            params.safety.limp_fall_standup_retries,
+                        ) {
+                            Standup::Nothing => {}
+                            Standup::Retry(retry) => {
+                                tracing::warn!(
+                                    retry,
+                                    of = params.safety.limp_fall_standup_retries,
+                                    after_ms = standup_timeout.as_millis(),
+                                    "stand-up not getting anywhere — settling, re-posing, retrying"
+                                );
+                                limp_fall = LimpFall::Limp {
+                                    since: tick_start,
+                                    landing: Landing::default(),
+                                };
+                            }
+                            Standup::GiveUp => {
+                                tracing::error!(
+                                    retries = params.safety.limp_fall_standup_retries,
+                                    "stand-up failed every retry — disabling the policy; \
+                                     Start tries again"
+                                );
+                                // What Start-off does: the next tick stops driving and holds
+                                // the home pose, and the robot stops grinding at the floor.
+                                intents.set_enabled(false);
+                            }
+                        }
                     }
                 }
                 LimpFall::Limp { since, mut landing } => {
@@ -5325,6 +5464,118 @@ mod tests {
             !landing.observe(Some(0.1), period, 1.0, held),
             "counting again"
         );
+    }
+
+    fn watch(standup: &mut StandupWatch, now: Instant, attempting: bool, fallen: bool) -> Standup {
+        standup.observe(
+            now,
+            Duration::from_millis(20),
+            attempting,
+            fallen,
+            Duration::from_secs(5),
+            2,
+        )
+    }
+
+    /// A stand-up still on the floor at the timeout is retried, up to the cap, and then given up
+    /// on — the robot rocking on its back forever is the bug this exists for.
+    #[test]
+    fn a_stand_up_that_never_gets_up_is_retried_then_given_up() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut standup = StandupWatch::default();
+
+        assert_eq!(watch(&mut standup, at(0), true, true), Standup::Nothing);
+        assert_eq!(watch(&mut standup, at(4_980), true, true), Standup::Nothing);
+        assert_eq!(
+            watch(&mut standup, at(5_000), true, true),
+            Standup::Retry(1)
+        );
+        // The sequence runs (not observed), hands back, and the timer starts over.
+        assert_eq!(watch(&mut standup, at(7_000), true, true), Standup::Nothing);
+        assert_eq!(
+            watch(&mut standup, at(12_000), true, true),
+            Standup::Retry(2)
+        );
+        assert_eq!(
+            watch(&mut standup, at(14_000), true, true),
+            Standup::Nothing
+        );
+        assert_eq!(watch(&mut standup, at(19_000), true, true), Standup::GiveUp);
+        // And giving up starts the count afresh, for whenever Start next hands it over.
+        assert_eq!(standup.retries, 0);
+    }
+
+    /// A pivot that tips past vertical and falls back is a failed stand-up, not a working one:
+    /// the verdict clears on a single upright sample, so it cannot be what success means.
+    #[test]
+    fn a_moment_upright_is_not_a_stand_up() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut standup = StandupWatch::default();
+
+        assert_eq!(watch(&mut standup, at(0), true, true), Standup::Nothing);
+        for ms in (2_000..2_500).step_by(20) {
+            assert_eq!(watch(&mut standup, at(ms), true, false), Standup::Nothing);
+        }
+        assert_eq!(
+            watch(&mut standup, at(5_000), true, true),
+            Standup::Retry(1)
+        );
+    }
+
+    /// Upright for a second is a stand-up that worked, and it forgives the retries spent on it.
+    #[test]
+    fn a_stand_up_that_holds_resets_the_count() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut standup = StandupWatch::default();
+
+        assert_eq!(watch(&mut standup, at(0), true, true), Standup::Nothing);
+        assert_eq!(
+            watch(&mut standup, at(5_000), true, true),
+            Standup::Retry(1)
+        );
+        for ms in (6_000..7_100).step_by(20) {
+            assert_eq!(watch(&mut standup, at(ms), true, false), Standup::Nothing);
+        }
+        assert_eq!(standup.retries, 0);
+        assert_eq!(standup.since, None);
+    }
+
+    /// Nothing is timed while the standing network is not the one driving — a skill, a sit,
+    /// a person walking it — and a robot that is upright never starts the clock.
+    #[test]
+    fn only_the_standing_network_on_the_floor_is_timed() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut standup = StandupWatch::default();
+
+        assert_eq!(watch(&mut standup, at(0), false, true), Standup::Nothing);
+        assert_eq!(
+            watch(&mut standup, at(9_000), false, true),
+            Standup::Nothing
+        );
+        assert_eq!(standup.since, None);
+        assert_eq!(
+            watch(&mut standup, at(9_020), true, false),
+            Standup::Nothing
+        );
+        assert_eq!(standup.since, None, "upright: not an attempt");
+
+        // And a timeout of zero is the retry switched off.
+        let mut standup = StandupWatch::default();
+        for ms in (0..20_000).step_by(1_000) {
+            let verdict = standup.observe(
+                at(ms),
+                Duration::from_millis(20),
+                true,
+                true,
+                Duration::ZERO,
+                3,
+            );
+            assert_eq!(verdict, Standup::Nothing);
+        }
     }
 
     /// Limp-fall ships OFF (the default gait has no standing network to hand back to), and

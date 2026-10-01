@@ -314,6 +314,16 @@ pub const REGISTRY: &[Entry] = &[
         Kind::Integer,
         "Gain for that ramp — softened standing, not limp",
     ),
+    entry(
+        "safety.limp_fall_standup_timeout_ms",
+        Kind::Integer,
+        "A stand-up still on the floor after this is failed: settle, re-pose, retry — 0 = off",
+    ),
+    entry(
+        "safety.limp_fall_standup_retries",
+        Kind::Integer,
+        "Retries before giving up and disabling the policy (home pose, Start to try again)",
+    ),
     // ── [duck_detector] ──────────────────────────────────────────────────────
     feature(
         "duck_detector.enabled",

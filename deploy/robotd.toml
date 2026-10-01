@@ -276,6 +276,18 @@ mode = "walk"
 # limp_fall_pose_ms = 600
 # limp_fall_pose_gain = 160
 
+# A stand-up that is not getting anywhere. From its back the robot sometimes never launches a
+# leg hard enough to pivot, and the standing network rocks and tries again for as long as
+# nobody steps in — where Start, a moment to settle at the home pose, and Start again almost
+# always works. This does that: if the standing network has been driving a fallen robot for
+# `limp_fall_standup_timeout_ms` without it getting up, the sequence above reruns — limp,
+# settle, pose, hand back. Getting up counts once the robot has been upright for a second, so a
+# pivot that tips past vertical and falls back is still a failure. After
+# `limp_fall_standup_retries` the policy is disabled instead: the robot goes to the home pose
+# and stops grinding at the floor, and Start tries again by hand. 0 turns the retry off.
+# limp_fall_standup_timeout_ms = 5000
+# limp_fall_standup_retries = 3
+
 # Sit down gracefully and power the machine off when the battery EMA reaches the empty
 # floor (6.6 V — the same value the battery percentage maps to 0%). The EMA moves over
 # ~10 s, so a load sag cannot trip it; reaching 6.6 requires a genuinely spent pack.
