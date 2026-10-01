@@ -1,7 +1,8 @@
 //! The behaviour: a randomised state machine on an energy model.
 //!
 //! Ported from the runtime's `autonomous.rs` (`docs/design/autonomous.md` §4), minus BallPlay,
-//! Held, Startle and Dance. **Pure decision-making**: it never touches a socket. Every tick it
+//! Held, Startle and Preen, and with Wander walking to goal points in the odometry frame rather
+//! than holding random headings. **Pure decision-making**: it never touches a socket. Every tick it
 //! takes a [`World`] and returns a [`Step`] of targets and one-shot events, and `main.rs` turns
 //! those into intents. That is what lets the soak test below run ten minutes of duck in a
 //! millisecond.
@@ -73,11 +74,129 @@ pub struct Step {
     pub wheee: bool,
 }
 
+/// What the obstacle gate did to a walking command, one tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    /// Fresh data, nothing close: as asked.
+    Clear,
+    /// The path was seen a while ago: half speed.
+    Aging,
+    /// The path is unseen: no advancing at all.
+    Unseen,
+    /// Something within `REACT_M`: slowed and steering away.
+    Reacting,
+    /// Something within `STOP_M`: stopped, turning away.
+    Stopped,
+}
+
+/// One wander bout, for the line logged when it ends. Its job is to say *why* a duck did not get
+/// far: a duck that sat at its start because the ToF never saw the path reads very differently
+/// here from one that kept turning back.
+#[derive(Debug, Clone, Copy, Default)]
+struct Bout {
+    start: [f64; 3],
+    goal: [f64; 2],
+    reached: bool,
+    /// Metres walked by odometry — against the net displacement, how much the duck strayed off
+    /// the straight line — and metres the commands asked for, which against the walked metres is
+    /// how well the gait tracks the twist.
+    path_m: f64,
+    asked_m: f64,
+    /// The closest it has been to the goal, and when (bout time) it last got meaningfully closer.
+    best_left_m: f64,
+    progress_at: f64,
+    /// Seconds the duck wanted to walk and the gate said: as asked / half speed / not at all /
+    /// slowed for something close.
+    clear_s: f64,
+    aging_s: f64,
+    unseen_s: f64,
+    reacting_s: f64,
+    stopped: bool,
+}
+
+impl Bout {
+    fn starting(pose: [f64; 3], goal: [f64; 2]) -> Self {
+        Self {
+            start: pose,
+            goal,
+            best_left_m: (goal[0] - pose[0]).hypot(goal[1] - pose[1]),
+            ..Self::default()
+        }
+    }
+
+    fn count(&mut self, gate: Gate, dt: f64) {
+        match gate {
+            Gate::Clear => self.clear_s += dt,
+            Gate::Aging => self.aging_s += dt,
+            Gate::Unseen => self.unseen_s += dt,
+            Gate::Reacting => self.reacting_s += dt,
+            Gate::Stopped => self.stopped = true,
+        }
+    }
+
+    fn log(&self, pose: [f64; 3]) {
+        let goal_m = (self.goal[0] - self.start[0]).hypot(self.goal[1] - self.start[1]);
+        tracing::info!(
+            covered_m = format!(
+                "{:.2}",
+                (pose[0] - self.start[0]).hypot(pose[1] - self.start[1])
+            ),
+            goal_m = format!("{goal_m:.2}"),
+            left_m = format!(
+                "{:.2}",
+                (self.goal[0] - pose[0]).hypot(self.goal[1] - pose[1])
+            ),
+            reached = self.reached,
+            path_m = format!("{:.2}", self.path_m),
+            asked_m = format!("{:.2}", self.asked_m),
+            clear_s = format!("{:.1}", self.clear_s),
+            aging_s = format!("{:.1}", self.aging_s),
+            unseen_s = format!("{:.1}", self.unseen_s),
+            reacting_s = format!("{:.1}", self.reacting_s),
+            stopped = self.stopped,
+            "wander bout over"
+        );
+    }
+}
+
 /// Default (calm) head smoothing. Soft, so stepwise glance targets round off into animal motion.
 const CALM_HEAD_ALPHA: f64 = 0.15;
 
 /// Mouth-open animation length for one quack.
 const QUACK_ANIM_S: f64 = 0.45;
+
+/// Wander goals: how far away they are picked, metres. Far enough that a bout crosses a room
+/// rather than shuffling, near enough that odometry — believed perfect until there is SLAM — has
+/// not drifted much by the time the duck gets there.
+const GOAL_DISTANCES: [f64; 3] = [1.0, 2.0, 3.0];
+/// Directions tried per goal pick.
+const GOAL_DIRECTIONS: usize = 16;
+/// A goal this close is reached.
+const GOAL_REACHED_M: f64 = 0.25;
+/// A bout gives up on its goal after this long without getting `GOAL_PROGRESS_M` closer — a timer
+/// from the distance and the commanded speed ended bouts short, because the gait does not walk
+/// as fast as it is asked to, and by a margin that differs between the twin and a robot.
+const GOAL_PATIENCE_S: f64 = 8.0;
+const GOAL_PROGRESS_M: f64 = 0.1;
+/// Even making progress, a bout ends after this: a goal it is still crawling toward is a duck
+/// that should stop and look around anyway.
+const BOUT_MAX_S: f64 = 90.0;
+/// Inside this, the duck slows toward the goal instead of overshooting it.
+const GOAL_SLOW_M: f64 = 0.4;
+/// Where an obstacle stopped the duck is remembered this long (s, behaviour clock), and a goal
+/// whose path passes within `BLOCKED_M` of it is not picked again — or the next goal is the same
+/// wall from the same side.
+const BLOCKED_S: f64 = 300.0;
+const BLOCKED_M: f64 = 0.4;
+
+/// The slowest forward command the gait actually walks at, m/s. Below it the walking policy
+/// stands still with its label still saying `walk` — measured on the twin: legs at rest under
+/// ~0.12 m/s, and a gait that would not *start* from a standstill at 0.14. Everything that scales
+/// the walking speed down (aging ToF data, closing on an obstacle, arriving at a goal) used to land
+/// there, which is a duck that stops for no visible reason and gives up on its goal.
+const MIN_WALK_VX: f64 = 0.15;
+/// A walk starts with this long at full speed, which is what gets the gait going.
+const START_KICK_S: f64 = 0.6;
 
 /// Novelty grid cell size (metres). Coarse on purpose: "have I hung around this half-metre
 /// patch" is the right granularity for boredom.
@@ -130,7 +249,7 @@ pub enum State {
     Chill,
     /// Stand still, actively glance in random directions.
     LookAround,
-    /// Walk forward slowly toward a novelty-picked heading.
+    /// Walk to a goal point in the odometry frame, picked toward space not yet visited.
     Wander,
     /// Rotate in place, usually to pick a new direction.
     TurnInPlace,
@@ -141,8 +260,8 @@ pub enum State {
     Stretch,
     /// A quick full-body shiver, shaking the feathers back into place.
     Ruffle,
-    /// The head reaches back into the "wing", nibbling, alternating sides.
-    Preen,
+    /// A body-pose groove on the standing gait, the head grooving along.
+    Dance,
     /// Inhale, hitch, a violent CHOO with a chirp, ring-down, dazed look around.
     Sneeze,
     /// Run the ground-pick policy and wait for it to finish.
@@ -182,15 +301,18 @@ pub struct Brain {
     /// Walking speed cap (m/s) and turning cap (rad/s): the pad's.
     max_speed: f64,
     max_turn: f64,
-    /// Wander: base forward speed, current yaw command, and the destination heading (odometry
-    /// frame) it is held to for several seconds. Steering at a held heading is what makes bouts
-    /// actually *go* somewhere instead of dithering around the start.
+    /// Wander: base forward speed and current yaw command.
     wander_vx: f64,
+    /// How long the current stretch of walking forward has lasted, for the start kick.
+    walking_s: f64,
     wander_wz: f64,
-    wander_heading: f64,
-    heading_repick_in: f64,
-    /// Where the current wander bout started, for the distance-covered log line.
-    wander_start_xy: [f64; 2],
+    /// Where this bout is going, in the odometry frame. Odometry is believed perfect: there is no
+    /// SLAM yet, and a goal a few metres off is reached before drift matters.
+    goal: Option<[f64; 2]>,
+    /// Where obstacles stopped the duck, `(point, clock)`, so goals avoid them.
+    blocked: Vec<([f64; 2], f64)>,
+    /// What this bout did, for the line logged when it ends.
+    bout: Bout,
     /// Wander glances: true while a brief side glance is held, and the countdown to toggling.
     glancing: bool,
     glance_in: f64,
@@ -200,11 +322,9 @@ pub struct Brain {
     nap_sit_sent: bool,
     nap_stand_sent: bool,
     droop: f64,
-    /// Dream twitches, preening side and seated preening, the sneeze's CHOO latch.
+    /// Dream twitches, the sneeze's CHOO latch.
     twitch_in: f64,
     twitch_t: f64,
-    preen_left: bool,
-    nap_preening: bool,
     sneeze_fired: bool,
     /// Energy, 0..1. Zoomies and walking burn it, chilling and naps restore it, and it shapes the
     /// transition weights, the walking speed and how chatty the duck is — so behaviours arrive in
@@ -253,10 +373,11 @@ impl Brain {
             max_speed: max_speed.max(0.0),
             max_turn: max_turn.max(0.0),
             wander_vx: 0.0,
+            walking_s: 0.0,
             wander_wz: 0.0,
-            wander_heading: 0.0,
-            heading_repick_in: 0.0,
-            wander_start_xy: [0.0; 2],
+            goal: None,
+            blocked: Vec::new(),
+            bout: Bout::default(),
             glancing: false,
             glance_in: 0.0,
             nap_doze: false,
@@ -265,8 +386,6 @@ impl Brain {
             droop: 0.0,
             twitch_in: 8.0,
             twitch_t: 1.0,
-            preen_left: false,
-            nap_preening: false,
             sneeze_fired: false,
             energy: 0.8,
             stop_heat: 0.0,
@@ -307,7 +426,7 @@ impl Brain {
         let mut ground_pick = false;
         let mut sit_toggle = false;
         let mut head_alpha = CALM_HEAD_ALPHA;
-        // Extra mouth opening beyond the quack envelope (preen nibbles, the sneeze's inhale),
+        // Extra mouth opening beyond the quack envelope (a yawn, the sneeze's inhale),
         // merged with the quack in the output.
         let mut mouth_extra = 0.0f64;
         let mut body = [0.0f64; 3];
@@ -357,13 +476,19 @@ impl Brain {
             State::TurnInPlace => -dt / 70.0,
             State::Nap => dt / 40.0,
             State::Petted => dt / 60.0,
-            State::Chill | State::Preen => dt / 120.0,
+            State::Dance => -dt / 45.0,
+            State::Chill => dt / 120.0,
             _ => dt / 240.0,
         };
         self.energy = (self.energy + de).clamp(0.05, 1.0);
 
         // Novelty grid: dwell time in the current cell, capped so old haunts are not infinitely
         // repulsive, and decayed slowly so places become fresh again.
+        if self.state == State::Wander {
+            self.bout.path_m +=
+                (world.pose[0] - self.last_pose[0]).hypot(world.pose[1] - self.last_pose[1]);
+            self.bout.asked_m += self.cmd[0] * dt;
+        }
         self.last_pose = world.pose;
         let cell = Self::cell_of(world.pose[0], world.pose[1]);
         let w = self.visits.entry(cell).or_insert(0.0);
@@ -482,25 +607,42 @@ impl Brain {
                 }
             }
             State::Wander => {
-                self.heading_repick_in -= dt;
-                if self.heading_repick_in <= 0.0 {
-                    self.heading_repick_in = self.rng.range(4.0, 7.0);
-                    self.wander_heading = self.pick_heading(0.9);
-                }
                 if self.retarget_in <= 0.0 {
                     self.retarget_in = self.rng.range(1.2, 3.0);
                     // Tired ducks amble; fresh ones trot.
                     let pep = 0.65 + 0.35 * self.energy;
                     self.wander_vx = self.rng.range(0.6 * self.max_speed, self.max_speed) * pep;
                 }
-                let heading_delta = wrap_angle(self.wander_heading - self.last_pose[2]);
+                let goal = match self.goal {
+                    Some(goal) => goal,
+                    None => {
+                        let goal = self.pick_goal();
+                        self.goal = Some(goal);
+                        goal
+                    }
+                };
+                let (dx, dy) = (goal[0] - self.last_pose[0], goal[1] - self.last_pose[1]);
+                let distance = dx.hypot(dy);
+                if distance < self.bout.best_left_m - GOAL_PROGRESS_M {
+                    self.bout.best_left_m = distance;
+                    self.bout.progress_at = self.t_state;
+                }
+                if distance < GOAL_REACHED_M {
+                    self.bout.reached = true;
+                    // The bout is over; the transition below picks what comes next.
+                    self.t_state = self.state_dur;
+                } else if self.t_state - self.bout.progress_at > GOAL_PATIENCE_S {
+                    tracing::info!(left_m = distance, "no closer to the goal — giving up on it");
+                    self.t_state = self.state_dur;
+                }
+                let heading_delta = wrap_angle(dy.atan2(dx) - self.last_pose[2]);
                 let pivoting = heading_delta.abs() > 0.7;
                 self.wander_wz = if pivoting {
-                    // Far off the destination: pivot first, walk after. Crawling the turn at
+                    // Far off the goal's bearing: pivot first, walk after. Crawling the turn at
                     // the walking yaw clamp wasted seconds at the start of every bout.
                     0.9 * self.max_turn * heading_delta.signum()
                 } else {
-                    (0.9 * heading_delta).clamp(-0.5, 0.5)
+                    (1.2 * heading_delta).clamp(-0.6, 0.6)
                 };
                 // Rubbernecking, but brief: short side glances that snap back to looking into
                 // the turn, so the head-mounted ToF keeps re-observing the walking corridor.
@@ -529,8 +671,19 @@ impl Brain {
                         ];
                     }
                 }
-                let base_vx = if pivoting { 0.0 } else { self.wander_vx };
-                let (vx, wz) = self.apply_obstacle_gate(base_vx, self.wander_wz, &world.obstacle);
+                // Slow into the goal rather than overshoot it and circle back.
+                let approach = (distance / GOAL_SLOW_M).clamp(0.3, 1.0);
+                let base_vx = if pivoting {
+                    0.0
+                } else {
+                    self.wander_vx * approach
+                };
+                let (vx, wz, gate) =
+                    self.apply_obstacle_gate(base_vx, self.wander_wz, &world.obstacle);
+                if base_vx > 0.0 {
+                    self.bout.count(gate, dt);
+                }
+                let vx = self.walkable(vx, dt);
                 self.cmd = [vx, 0.0, wz];
             }
             State::TurnInPlace => {
@@ -554,8 +707,9 @@ impl Brain {
                         self.rng.sym(0.15),
                     ];
                 }
-                let (vx, wz) =
+                let (vx, wz, _) =
                     self.apply_obstacle_gate(self.max_speed, self.wander_wz, &world.obstacle);
+                let vx = self.walkable(vx, dt);
                 self.cmd = [vx, 0.0, wz];
             }
             State::Stretch => {
@@ -623,19 +777,26 @@ impl Brain {
                     0.25 * env * (w + 2.2).sin(),
                 ];
             }
-            State::Preen => {
-                // Reach back and down into the wing, nibble, swap sides now and then.
+            State::Dance => {
                 self.cmd = [0.0; 3];
                 let t = self.t_state;
-                if self.retarget_in <= 0.0 {
-                    self.retarget_in = self.rng.range(1.5, 2.6);
-                    self.preen_left = !self.preen_left;
-                }
-                let side = if self.preen_left { 1.0 } else { -1.0 };
-                let nib = (two_pi * 6.0 * t).sin();
-                self.head = [-0.15, -0.60 + 0.06 * nib, side * 1.05, side * 0.35];
-                head_alpha = 0.3;
-                mouth_extra = (0.12 + 0.10 * nib).max(0.0);
+                // Fade in over 0.5 s and out over the last second, so the body pose is back at
+                // neutral before the mode ends.
+                let env = (t / 0.5).min(1.0) * ((self.state_dur - t) / 1.0).clamp(0.0, 1.0);
+                body = [
+                    env * (-0.006 + 0.010 * (two_pi * 1.1 * t).sin()),
+                    env * 0.07 * (two_pi * 0.55 * t).sin(),
+                    env * 0.12 * (two_pi * 1.1 * t + 1.0).sin(),
+                ];
+                body_active = t < self.state_dur;
+                // The head grooves along, hard — half the dance is the head.
+                head_alpha = 0.30;
+                self.head = [
+                    0.0,
+                    env * 0.18 * (two_pi * 0.55 * t).sin(),
+                    env * 0.35 * (two_pi * 0.55 * t + 0.7).sin(),
+                    env * 0.45 * (two_pi * 1.1 * t + 1.0).sin(),
+                ];
             }
             State::Sneeze => {
                 self.cmd = [0.0; 3];
@@ -734,32 +895,19 @@ impl Brain {
                         }
                     } else {
                         // Seated relax: a soft slow look-around, the spontaneous quacks still
-                        // running, and the occasional seated preen.
+                        // running.
                         if self.retarget_in <= 0.0 {
-                            self.nap_preening = self.rng.chance(0.3);
-                            if self.nap_preening {
-                                self.retarget_in = self.rng.range(2.2, 3.8);
-                                self.preen_left = self.rng.chance(0.5);
-                            } else {
-                                self.retarget_in = self.rng.range(1.6, 3.2);
-                                self.head = [
-                                    self.rng.sym(0.10),
-                                    self.rng.range(-0.15, 0.35),
-                                    self.rng.sym(0.8),
-                                    if self.rng.chance(0.4) {
-                                        self.rng.sym(0.35)
-                                    } else {
-                                        0.0
-                                    },
-                                ];
-                            }
-                        }
-                        if self.nap_preening {
-                            let side = if self.preen_left { 1.0 } else { -1.0 };
-                            let nib = (two_pi * 6.0 * t).sin();
-                            self.head = [-0.15, -0.55 + 0.06 * nib, side, side * 0.30];
-                            head_alpha = 0.3;
-                            mouth_extra = (0.12 + 0.10 * nib).max(0.0);
+                            self.retarget_in = self.rng.range(1.6, 3.2);
+                            self.head = [
+                                self.rng.sym(0.10),
+                                self.rng.range(-0.15, 0.35),
+                                self.rng.sym(0.8),
+                                if self.rng.chance(0.4) {
+                                    self.rng.sym(0.35)
+                                } else {
+                                    0.0
+                                },
+                            ];
                         }
                     }
                 } else if !self.nap_stand_sent {
@@ -975,28 +1123,97 @@ impl Brain {
         best.1
     }
 
-    /// The freshness/steer/stop gate on a walking command. On a hard stop it also switches to
-    /// TurnInPlace, away from the obstacle, so callers use the returned command as is.
+    /// A goal for the next wander bout, in the odometry frame: the candidate point (in
+    /// `GOAL_DIRECTIONS` directions at `GOAL_DISTANCES`) whose straight path crosses the least
+    /// visited ground, keeps clear of where obstacles stopped the duck, and is far rather than
+    /// near — with a small cost for turning, and jitter so ties break randomly.
+    fn pick_goal(&mut self) -> [f64; 2] {
+        let [x, y, yaw] = self.last_pose;
+        let now = self.clock;
+        self.blocked.retain(|(_, at)| now - at <= BLOCKED_S);
+        let offset = self.rng.range(0.0, std::f64::consts::TAU);
+        let mut best = (f64::MAX, [x + yaw.cos(), y + yaw.sin()]);
+        for k in 0..GOAL_DIRECTIONS {
+            let heading = offset + std::f64::consts::TAU * k as f64 / GOAL_DIRECTIONS as f64;
+            let (s, c) = heading.sin_cos();
+            for d in GOAL_DISTANCES {
+                // Dwell along the path, sampled every quarter metre: the duck walks the whole of
+                // it, so the whole of it is what is new or not.
+                let steps = (d / 0.25) as usize;
+                let mut dwell = 0.0f64;
+                let mut shut = false;
+                for i in 1..=steps {
+                    let r = d * i as f64 / steps as f64;
+                    let (px, py) = (x + r * c, y + r * s);
+                    dwell += f64::from(self.visit_at(px, py));
+                    shut |= self
+                        .blocked
+                        .iter()
+                        .any(|(b, _)| (b[0] - px).hypot(b[1] - py) < BLOCKED_M);
+                }
+                let turn = wrap_angle(heading - yaw).abs() / std::f64::consts::PI;
+                let score = dwell / steps as f64 + if shut { 100.0 } else { 0.0 } - 0.5 * d
+                    + 0.6 * turn
+                    + self.rng.range(0.0, 0.5);
+                if score < best.0 {
+                    best = (score, [x + d * c, y + d * s]);
+                }
+            }
+        }
+        best.1
+    }
+
+    /// A forward command the gait will act on: zero, or at least `MIN_WALK_VX`, and full speed for
+    /// the first `START_KICK_S` of a walk.
+    fn walkable(&mut self, vx: f64, dt: f64) -> f64 {
+        // `self.cmd` is still last tick's here. Whatever stopped the walk — a pivot, a gate, or a
+        // whole other state — the next forward command is a start, and gets the kick.
+        if vx <= 0.01 || self.cmd[0] <= 0.01 {
+            self.walking_s = 0.0;
+        }
+        if vx <= 0.01 {
+            return 0.0;
+        }
+        self.walking_s += dt;
+        if self.walking_s < START_KICK_S {
+            self.max_speed
+        } else {
+            vx.max(MIN_WALK_VX.min(self.max_speed))
+        }
+    }
+
+    /// The freshness/steer/stop gate on a walking command, and what it did. On a hard stop it
+    /// also switches to TurnInPlace, away from the obstacle, so callers use the returned command
+    /// as is.
     fn apply_obstacle_gate(
         &mut self,
         mut vx: f64,
         wz: f64,
         obstacle: &Option<Obstacle>,
-    ) -> (f64, f64) {
+    ) -> (f64, f64, Gate) {
         match obstacle.filter(|o| o.age_s <= STALE_S) {
             None => {
                 // The walking direction is unobserved (never seen, too old, or we turned since):
                 // do not advance, but KEEP TURNING. Turning in place is collision-safe, and
                 // zeroing the turn too froze the duck mid-pivot until the next forward frame.
-                (0.0, wz)
+                (0.0, wz, Gate::Unseen)
             }
             Some(o) => {
-                if o.age_s > FRESH_S {
+                let aging = o.age_s > FRESH_S;
+                if aging {
                     vx *= 0.5;
                 }
                 let away = o.away;
                 if o.ahead_m < STOP_M {
                     tracing::info!(ahead_m = o.ahead_m, "obstacle ahead — turning away");
+                    if self.state == State::Wander {
+                        // Remember where the way was shut, so the next goal is not behind the same
+                        // wall. Just past the beak, along the heading the duck was walking.
+                        let [x, y, yaw] = self.last_pose;
+                        let reach = crate::obstacle::BEAK_M + o.ahead_m + 0.1;
+                        self.blocked
+                            .push(([x + reach * yaw.cos(), y + reach * yaw.sin()], self.clock));
+                    }
                     self.enter(State::TurnInPlace);
                     self.turn_rate = self.turn_rate.abs() * away;
                     // Three hard stops while the heat is up means boxed in: an annoyed quack
@@ -1011,12 +1228,18 @@ impl Brain {
                         self.turn_rate = self.max_turn * away;
                         self.state_dur = self.state_dur.max(1.8);
                     }
-                    (0.0, self.turn_rate)
+                    (0.0, self.turn_rate, Gate::Stopped)
                 } else if o.ahead_m < REACT_M {
                     let closeness = ((REACT_M - o.ahead_m) / (REACT_M - STOP_M)).clamp(0.0, 1.0);
-                    (vx * (1.0 - 0.8 * closeness), wz + away * 0.6 * closeness)
+                    (
+                        vx * (1.0 - 0.8 * closeness),
+                        wz + away * 0.6 * closeness,
+                        Gate::Reacting,
+                    )
+                } else if aging {
+                    (vx, wz, Gate::Aging)
                 } else {
-                    (vx, wz)
+                    (vx, wz, Gate::Clear)
                 }
             }
         }
@@ -1050,13 +1273,8 @@ impl Brain {
     }
 
     fn enter(&mut self, next: State) {
-        if self.state == State::Wander && next != State::Wander {
-            let dx = self.last_pose[0] - self.wander_start_xy[0];
-            let dy = self.last_pose[1] - self.wander_start_xy[1];
-            tracing::info!(covered_m = (dx * dx + dy * dy).sqrt(), "wander bout over");
-        }
-        if next == State::Wander && self.state != State::Wander {
-            self.wander_start_xy = [self.last_pose[0], self.last_pose[1]];
+        if self.state == State::Wander {
+            self.bout.log(self.last_pose);
         }
         self.state = next;
         self.t_state = 0.0;
@@ -1072,11 +1290,11 @@ impl Brain {
                 // forward-looking pose at once.
                 self.glancing = true;
                 self.glance_in = 0.0;
-                // A wide spread: starting a walk with a hard turn toward fresh space is fine,
-                // and looks purposeful.
-                self.wander_heading = self.pick_heading(2.2);
-                self.heading_repick_in = self.rng.range(4.0, 7.0);
-                self.rng.range(8.0, 18.0)
+                let goal = self.pick_goal();
+                self.goal = Some(goal);
+                self.bout = Bout::starting(self.last_pose, goal);
+                // Ends on arrival, or when it stops getting closer (see `GOAL_PATIENCE_S`).
+                BOUT_MAX_S
             }
             State::TurnInPlace => {
                 // Near the policy's top yaw rate: snappy turns read better than slow ones.
@@ -1104,9 +1322,10 @@ impl Brain {
             }
             State::Stretch => self.rng.range(5.5, 6.5),
             State::Ruffle => self.rng.range(1.4, 2.0),
-            State::Preen => {
-                self.preen_left = self.rng.chance(0.5);
-                self.rng.range(4.0, 7.0)
+            State::Dance => {
+                // It kicks off with an excited chirp.
+                self.next_quack_in = self.next_quack_in.min(0.5);
+                self.rng.range(5.0, 8.0)
             }
             State::Sneeze => {
                 self.sneeze_fired = false;
@@ -1176,25 +1395,14 @@ impl Brain {
                     State::LookAround
                 }
             }
-            // A grooming session: ruffle and preen chain into each other.
+            // Feathers back in place: look around, settle, or go somewhere.
             State::Ruffle => {
-                if r < 0.35 {
-                    State::Preen
-                } else if r < 0.60 {
+                if r < 0.40 {
                     State::LookAround
-                } else if r < 0.82 {
+                } else if r < 0.70 {
                     State::Chill
                 } else {
                     State::Wander
-                }
-            }
-            State::Preen => {
-                if r < 0.30 {
-                    State::Ruffle
-                } else if r < 0.62 {
-                    State::LookAround
-                } else {
-                    State::Chill
                 }
             }
             // Shake it off after a sneeze, usually.
@@ -1226,7 +1434,7 @@ impl Brain {
                     (State::Stretch, 0.05),
                     (State::GroundPick, if can_ground_pick { 0.05 } else { 0.0 }),
                     (State::Ruffle, 0.06),
-                    (State::Preen, 0.04 + 0.05 * (1.0 - e)),
+                    (State::Dance, if e > 0.4 { 0.05 } else { 0.0 }),
                     (State::Sneeze, 0.03),
                 ];
                 let look = (State::LookAround, 0.12 + 0.06 * (1.0 - e));
@@ -1330,9 +1538,11 @@ mod tests {
         let mut bench = Bench::new(0x5eed);
         let (mut walk, mut still, mut picks, mut naps, mut quacks) = (0, 0, 0, 0, 0);
         let mut seen = std::collections::HashSet::new();
+        let mut farthest = 0.0f64;
         for _ in 0..(10 * 60 * 50) {
             let out = bench.tick(|_| {});
             seen.insert(bench.brain.state());
+            farthest = farthest.max(bench.pose[0].hypot(bench.pose[1]));
             assert!(
                 (0.0..=MAX_SPEED + 1e-9).contains(&out.cmd[0]),
                 "vx out of range: {}",
@@ -1367,6 +1577,12 @@ mod tests {
             still > 60 * 50,
             "basically never stood still: {still} ticks"
         );
+        // On a robot the random-heading wander stayed within half a metre of where it started.
+        // Walking to goal points is what makes it range.
+        assert!(
+            farthest > 2.0,
+            "never got far from the start: {farthest:.2} m"
+        );
         assert!(picks > 0, "never pecked");
         assert!(naps > 0, "never napped");
         assert!(quacks >= 20, "too quiet: {quacks}");
@@ -1382,6 +1598,64 @@ mod tests {
         ] {
             assert!(seen.contains(&state), "never entered {state:?}");
         }
+    }
+
+    /// With odometry believed, a wander bout walks to its goal and stops there — not short of it
+    /// on the timer, not past it.
+    #[test]
+    fn a_wander_bout_walks_to_its_goal() {
+        let mut bench = Bench::new(21);
+        bench.brain.next_quack_in = 1e9;
+        bench.brain.enter(State::Wander);
+        let goal = bench.brain.goal.expect("a goal on entry");
+        let start = goal[0].hypot(goal[1]);
+        assert!(start >= 1.0, "a goal worth walking to: {start:.2} m");
+        let mut closest = f64::MAX;
+        while bench.brain.state() == State::Wander {
+            bench.tick(|_| {});
+            closest = closest.min((goal[0] - bench.pose[0]).hypot(goal[1] - bench.pose[1]));
+        }
+        assert!(closest < GOAL_REACHED_M, "ended {closest:.2} m short");
+        assert!(bench.brain.bout.reached);
+    }
+
+    /// Where an obstacle stopped the duck, the next goal does not lead back.
+    #[test]
+    fn a_goal_avoids_where_the_way_was_shut() {
+        let mut brain = Brain::new(MAX_SPEED, MAX_TURN, 9);
+        // A wall a little ahead in every direction but one: +y.
+        for k in 0..16 {
+            let a = std::f64::consts::TAU * k as f64 / 16.0;
+            if (a - std::f64::consts::FRAC_PI_2).abs() > 1.0 {
+                brain.blocked.push(([0.5 * a.cos(), 0.5 * a.sin()], 0.0));
+            }
+        }
+        for _ in 0..20 {
+            let goal = brain.pick_goal();
+            assert!(goal[1] > 0.5, "goal {goal:?} goes through the wall");
+        }
+    }
+
+    /// Every start from a standstill gets the kick, whatever stopped the duck before — the twin's
+    /// gait does not get going below 0.25 m/s, and a bout that began after Chill used to inherit
+    /// the last walk's timer and start at 0.2, standing still with `walk` on its label.
+    #[test]
+    fn every_walk_starts_with_a_kick() {
+        let mut brain = Brain::new(MAX_SPEED, MAX_TURN, 1);
+        brain.cmd = [0.2, 0.0, 0.0];
+        brain.walking_s = 10.0;
+        assert_eq!(brain.walkable(0.2, 0.02), 0.2, "mid-walk: as asked");
+        brain.cmd = [0.0; 3];
+        assert_eq!(brain.walkable(0.2, 0.02), MAX_SPEED, "a start: the kick");
+        brain.cmd = [0.3, 0.0, 0.0];
+        for _ in 0..40 {
+            brain.walkable(0.2, 0.02);
+        }
+        assert_eq!(
+            brain.walkable(0.05, 0.02),
+            MIN_WALK_VX,
+            "never below what the gait walks at"
+        );
     }
 
     /// No ToF at all must mean no walking — turning is fine, advancing blind is not.

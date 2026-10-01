@@ -129,9 +129,6 @@ struct Latest {
 struct Abilities {
     ground_pick: bool,
     sit_stand: bool,
-    /// A standing network, which is what makes body pose do anything. The velstand gait has
-    /// none, and `robot.pose` then only zeroes the twist.
-    stand: bool,
     /// The robot speaks v38: `robot.head` takes `alpha`.
     head_alpha: bool,
 }
@@ -196,13 +193,11 @@ fn subscribe(
         Some(ack) => Abilities {
             ground_pick: ack.ground_pick.is_some(),
             sit_stand: ack.sitstand.is_some(),
-            stand: ack.stand.is_some(),
             head_alpha,
         },
         None => Abilities {
             ground_pick: false,
             sit_stand: false,
-            stand: false,
             head_alpha,
         },
     };
@@ -536,7 +531,9 @@ fn drive(
         push(&proto::Call::RobotMouth(proto::MouthParams {
             open: step.mouth,
         }))?;
-        if abilities.stand && (step.body_active || posing) {
+        // Body pose works on the velstand gait as well as on a standing network, so it goes out
+        // whenever the brain poses, and once more with `active: false` when it stops.
+        if step.body_active || posing {
             push(&proto::Call::RobotPose(proto::PoseParams {
                 z: step.body[0],
                 pitch: step.body[1],

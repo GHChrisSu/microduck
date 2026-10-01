@@ -84,12 +84,12 @@ states come over:
 |---|---|
 | Chill | stands, small slow head drifts, breathing mouth |
 | LookAround | big glances, head cocks |
-| Wander | walks a novelty-picked heading, brief side glances that snap back so the ToF keeps seeing the path |
+| Wander | walks to a goal point 1–3 m away in the odometry frame (below), brief side glances that snap back so the ToF keeps seeing the path |
 | TurnInPlace | spins toward the least-visited direction, head leading |
 | Zoomies | full speed, jerky turns, the wheee ride; only with fresh, clear ToF ahead |
 | Stretch | crane up, yawn, coo, head shake |
 | Ruffle | fast feather shiver |
-| Preen | head into the wing, nibbling, alternating sides |
+| Dance | body-pose groove, the head grooving along |
 | Sneeze | inhale, hitch, CHOO, dazed look |
 | GroundPick | `robot.do ground_pick`, then a happy quack |
 | Nap | `sit_toggle`: either a doze (head droops, snaps up, dream twitches) or a seated relax |
@@ -100,7 +100,7 @@ Across all states:
 - **Energy, from 0 to 1.** Walking and zoomies burn it; chilling, naps and petting refill it. It
   weights the next state, the walking speed and how chatty the duck is.
 - **Novelty grid.** Dwell time is kept per 0.5 m cell of the odometry frame and decays over about
-  15 minutes. Wander and turn headings lean toward space the duck has not been in.
+  15 minutes. Wander goals and turn headings lean toward space the duck has not been in.
 - **Quack bursts.** One to four `chirp`s, with the mouth and a head toss.
 - **Head bob while walking.**
 - **Sounds.** A voice gets an attentive perk and a quacked answer after a beat. A sharp noise
@@ -113,12 +113,35 @@ Across all states:
 - **Held.** Pickup detection was shelved as unreliable.
 - **Startle, and the curiosity glance built on the same per-bin change memory.** Neither worked
   well enough.
-- **Dance.** It is pure body pose.
+- **Preen**, and the seated preening in a nap. It did not read well.
 
-**Body pose is sent only when the robot has a standing network.** Stretch, Ruffle and Petted carry
-body-pose targets, as in the runtime. On the velstand gait (`stand` empty in the subscribe ack)
-`robot.pose` only zeroes the twist and moves nothing, so `autod` leaves it alone; the head and
-mouth parts of those states still play. Dance comes back when body control does.
+**Body pose** carries Dance, and the body halves of Stretch, Ruffle and Petted. The velstand gait
+takes body pose again, so `autod` sends it whenever a state poses, and once with `active: false`
+when the state ends.
+
+**Wander walks to goals, on odometry believed perfect.** There is no SLAM yet, and a goal a few
+metres away is reached before drift matters. The runtime's version, holding a random heading for a
+few seconds at a time, stayed within half a metre of its start on a robot.
+
+- **Picking a goal.** Each bout tries 16 directions at 1, 2 and 3 m. It takes the point whose
+  straight path crosses the least-visited ground of the novelty grid, preferring far over near,
+  with a small cost for turning.
+- **Avoiding dead ends.** It avoids paths within 0.4 m of where an obstacle stopped the duck in the
+  last five minutes, so the next goal is not behind the same wall.
+- **Walking it.** The duck pivots first when the goal is more than 0.7 rad off its heading, steers
+  as it walks, and slows inside 0.4 m.
+- **Ending a bout.** A bout ends on arrival (0.25 m), or after 8 s without getting 10 cm closer.
+  A timer computed from distance and speed was wrong, because the gait does not walk as fast as it
+  is asked to.
+- **The bout log.** Every bout ends with one `wander bout over` line: distance covered against the
+  goal's distance, metres walked and metres asked for, and seconds spent clear, aging, unseen and
+  slowed by the obstacle gate. When a duck does not get far, that line says why.
+
+**A forward command the gait will walk at.** The walking policy stands still at small commands,
+with its label still saying `walk`. On the twin, a walking duck stops below about 0.12 m/s, and a
+standing one does not start below 0.25. Everything that scales speed down (aging ToF data, closing
+on an obstacle, arriving at a goal) used to land there. So `autod` never asks for less than
+`MIN_WALK_VX` (0.15 m/s), and every start from a standstill gets 0.6 s at full speed.
 
 **Speeds are the pad's.** Linear 0.3 m/s and angular 1.5 rad/s: `robotd_params::drive`, which
 `padd`'s stick scaling defaults to as well. There is no separate autonomous speed knob.
