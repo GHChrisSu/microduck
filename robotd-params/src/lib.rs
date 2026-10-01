@@ -89,6 +89,43 @@ pub struct Params {
     /// editor renames the section the next time it saves that file.
     #[serde(alias = "imu_head")]
     pub pad_imu_head_control: PadImuHeadControlParams,
+    /// The autonomous brain. `autod` reads it, and so does `padd` — the pad stays silent until
+    /// touched while it is on.
+    pub autonomous: AutonomousParams,
+}
+
+/// How fast a driver may ask the robot to go: the pad's full stick, and the autonomous brain's
+/// ceiling. One place, so the duck on its own never moves faster — or slower — than the person
+/// holding the pad could make it.
+pub mod drive {
+    /// Forward, backward and strafe, m/s.
+    pub const MAX_LINEAR: f64 = 0.3;
+    /// Yaw rate, rad/s.
+    pub const MAX_ANGULAR: f64 = 1.5;
+}
+
+/// `[autonomous]` — the duck on its own. `docs/design/autonomous.md` is the design.
+///
+/// **Off by default.** A duck that wanders, naps and quacks by itself is a lovely thing to have
+/// chosen and an alarming thing to unbox, and it also boots straight into a standing walk with no
+/// pad — so it is a decision somebody makes for a robot, never one a release makes for them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct AutonomousParams {
+    /// Run the brain. With this on, `autod` stands the robot up at boot with no pad connected,
+    /// and the pad takes over only while somebody is touching it.
+    pub enabled: bool,
+    /// Seconds of an untouched pad before `padd` goes quiet and the brain takes back over.
+    pub pad_idle_s: f64,
+}
+
+impl Default for AutonomousParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pad_idle_s: 30.0,
+        }
+    }
 }
 
 /// Controller-IMU head control: pose the head by tilting the pad.
@@ -1931,6 +1968,8 @@ pub enum ParamsError {
         min: u32,
         max: u32,
     },
+    #[error("{path}: autonomous.pad_idle_s must be a positive number of seconds, got {got}")]
+    PadIdle { path: String, got: f64 },
 }
 
 /// The band `media.bitrate` is accepted in, bits per second.
@@ -2017,6 +2056,15 @@ impl Params {
                 got: bitrate,
                 min: BITRATE_MIN,
                 max: BITRATE_MAX,
+            });
+        }
+        // Zero would mean a pad that hands control back the instant it is let go of — in practice
+        // between two stick reports — so the two drivers would alternate every tick.
+        let idle = self.autonomous.pad_idle_s;
+        if !idle.is_finite() || idle <= 0.0 {
+            return Err(ParamsError::PadIdle {
+                path: path.display().to_string(),
+                got: idle,
             });
         }
         Ok(())

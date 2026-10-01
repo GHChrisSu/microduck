@@ -7,9 +7,10 @@ three different documents, and the answer decides how a skew is diagnosed.
 Everything here is read from the code, and each step names the function that owns it. Where a
 narrative comment elsewhere disagrees with this page, the comment is the bug.
 
-## 1. The seven daemons, and the unit that is not one
+## 1. The eight daemons, and the unit that is not one
 
-A release ships seven daemons — `robotd`, `configd`, `btd`, `padd`, `mediad`, `tofd`, `updaterd` —
+A release ships eight daemons — `robotd`, `configd`, `btd`, `padd`, `autod`, `mediad`, `tofd`,
+`updaterd` —
 each `ExecStart`ing a path under `/opt/robot/daemon/current/bin/`, so each is stale the instant the
 symlink moves, and each is either restarted by the update or restarted after it.
 
@@ -23,6 +24,7 @@ no `[Install]` section, and that is what keeps it out — see §1.1.
 | `robotd` | yes | — |
 | `configd` | yes | — |
 | `padd` | yes | — |
+| `autod` | yes | — |
 | `mediad` | yes | — |
 | `tofd` | yes | — |
 | `updaterd` | **never** — it is the process performing the update | yes |
@@ -73,7 +75,7 @@ units an update cannot touch are exactly the two it exists to watch.
 On today's release `units_to_restart` is exactly:
 
 ```
-configd, mediad, padd, robotd, tofd
+autod, configd, mediad, padd, robotd, tofd
 ```
 
 in that order — alphabetical, so the order is identical on every board and in every test. Nothing

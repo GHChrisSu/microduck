@@ -1379,6 +1379,7 @@ impl Client {
     fn hello_result(&mut self) -> Result<proto::HelloResult, Failure> {
         let response = self.call(&proto::Call::Hello(proto::HelloParams {
             api_version: proto::API_VERSION,
+            client: None,
         }))?;
         if let Some(error) = response.error {
             // Passed through unadorned. This side cannot add a remedy the daemon does not

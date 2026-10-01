@@ -4,7 +4,8 @@
 # mostly a change needs a restart — of the daemon that reads the section, which is not
 # always robotd: [media] and [duck_detector] are mediad's and [head_imu] is tofd's. The two
 # exceptions: padd re-reads [pad_imu_head_control] a second after the file changes, and robotd
-# re-reads [policy] when asked. `robotctl configure` knows which is which and offers it
+# re-reads [policy] when asked. [autonomous] is autod's, which restarts for it, and padd's, which
+# re-reads it like [pad_imu_head_control]. `robotctl configure` knows which is which and offers it
 # (docs/design/robotd-design.md §4.2).
 #
 # It lives here, and not under /opt/robot/daemon/releases/<ver>/, on purpose: this is
@@ -496,3 +497,16 @@ mode = "walk"
 # Head radians per pad radian. 1 follows the pad exactly; more turns a small wrist movement into
 # a large head movement. The head's own travel limit still applies.
 # gain = 1.0
+
+# ── The duck on its own ──────────────────────────────────────────────────────────────────────
+#
+# Read by `autod`, and by `padd` (docs/design/autonomous.md). With `enabled` on, the robot stands
+# itself up at boot with no pad connected, then wanders, looks around, grooms, naps and answers
+# when spoken to, avoiding obstacles with the head's depth sensor. A pad stays silent until it is
+# touched; touching it takes over, and `pad_idle_s` untouched seconds later the duck takes back
+# over. Off by default: a duck that walks off by itself is something somebody chooses.
+# [autonomous]
+# enabled = false
+
+# Seconds of an untouched pad before the duck takes back over.
+# pad_idle_s = 30.0

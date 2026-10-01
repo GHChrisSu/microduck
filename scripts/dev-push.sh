@@ -342,6 +342,7 @@ cp "$BIN"/robotd staged/
 cp "$BIN"/configd staged/
 cp "$BIN"/btd staged/
 cp "$BIN"/padd staged/
+cp "$BIN"/autod staged/
 # The WebRTC gateway. Its unit ships with an `[Install]` section, so postinstall enables and starts
 # it and `on_apply` restarts it, exactly as for every other daemon here.
 cp "$BIN"/mediad staged/
@@ -389,6 +390,8 @@ cargo run -p xtask -- package \
     --include "btd/systemd/sysusers.d/btd.conf=systemd/sysusers.d/btd.conf" \
     --include "padd/systemd/padd.service=systemd/padd.service" \
     --include "padd/systemd/sysusers.d/padd.conf=systemd/sysusers.d/padd.conf" \
+    --include "autod/systemd/autod.service=systemd/autod.service" \
+    --include "autod/systemd/sysusers.d/autod.conf=systemd/sysusers.d/autod.conf" \
     --include "mediad/systemd/mediad.service=systemd/mediad.service" \
     --include "mediad/systemd/sysusers.d/mediad.conf=systemd/sysusers.d/mediad.conf" \
     --include "tof/systemd/tofd.service=systemd/tofd.service" \
@@ -498,7 +501,7 @@ echo "    current -> $want"
 # no socket at all, so for that one it is the only answer available.
 deadline=$(($(date +%s) + 30))
 stale=""
-for svc in robotd configd padd updaterd btd mediad tofd; do
+for svc in robotd configd padd autod updaterd btd mediad tofd; do
     while :; do
         if [ ! -f "/run/${svc}/identity.json" ]; then
             state="silent"

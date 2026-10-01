@@ -131,6 +131,9 @@ jobs:
           # anyone drives the robot from, and the intent API only stays honest if the
           # thing exercising it daily is actually on the robot.
           cp target/aarch64-unknown-linux-gnu/release/padd staged/
+          # autod is the autonomous brain. Shipped and enabled everywhere, idle unless
+          # `[autonomous] enabled` (docs/design/autonomous.md).
+          cp target/aarch64-unknown-linux-gnu/release/autod staged/
           # mediad is the WebRTC gateway. Shipped so a board *can* run it; its unit has no
           # [Install], so nothing starts it until someone does. See mediad/systemd/mediad.service.
           cp target/aarch64-unknown-linux-gnu/release/mediad staged/
@@ -175,6 +178,8 @@ jobs:
             --include "btd/systemd/sysusers.d/btd.conf=systemd/sysusers.d/btd.conf" \
             --include "padd/systemd/padd.service=systemd/padd.service" \
             --include "padd/systemd/sysusers.d/padd.conf=systemd/sysusers.d/padd.conf" \
+            --include "autod/systemd/autod.service=systemd/autod.service" \
+            --include "autod/systemd/sysusers.d/autod.conf=systemd/sysusers.d/autod.conf" \
             --include "mediad/systemd/mediad.service=systemd/mediad.service" \
             --include "mediad/systemd/sysusers.d/mediad.conf=systemd/sysusers.d/mediad.conf" \
             --include "tof/systemd/tofd.service=systemd/tofd.service" \

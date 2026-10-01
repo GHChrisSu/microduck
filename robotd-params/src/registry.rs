@@ -468,6 +468,19 @@ pub const REGISTRY: &[Entry] = &[
         Kind::Float,
         "Head radians per pad radian — 1 follows the pad exactly, more amplifies the wrist",
     ),
+    // ── [autonomous] ─────────────────────────────────────────────────────────
+    //
+    // Read by `autod`, and by `padd`, which stays silent until the pad is touched while it is on.
+    feature(
+        "autonomous.enabled",
+        Kind::Bool,
+        "The duck on its own: stands up at boot with no pad, wanders, naps; touching the pad takes over",
+    ),
+    entry(
+        "autonomous.pad_idle_s",
+        Kind::Float,
+        "Seconds of an untouched pad before the duck takes back over",
+    ),
 ];
 
 /// Sections that changed name: `(old, new)`.
@@ -682,6 +695,7 @@ mod tests {
                 "pad.rb",
                 "pad.dpad_down",
                 "pad_imu_head_control.enabled",
+                "autonomous.enabled",
             ]
         );
     }

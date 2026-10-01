@@ -110,6 +110,11 @@ fn apply_for(key: &str) -> Option<Apply> {
         // `tofd` reads `[head_imu]` out of robotd's file — see `tof/src/config.rs` for why it
         // reads that file rather than one of its own — and reads it once, at startup.
         "head_imu" => Apply::Restart("tofd"),
+        // Two readers, and only one of them needs anything: `autod` reads `[autonomous]` once at
+        // startup (and parks when it is off), while `padd` re-reads it with `[pad]` a second after
+        // the file changes. So the offer is `autod`'s restart, which is also what stands the robot
+        // up when the switch goes on.
+        "autonomous" => Apply::Restart("autod"),
         // `[policy]` is the one section a running daemon takes back: `PolicyChange::Reload`
         // re-reads it whole and rebuilds the controller from it, which is how `robotctl policy
         // add` lands a skill without a restart. Two keys are not in that promise:
@@ -1125,6 +1130,17 @@ mod tests {
             "the controller's IMU is padd's, and padd re-reads it"
         );
         assert!(plan.restart.is_empty(), "and it needs no restart");
+    }
+
+    /// Switching autonomy on restarts the brain — the one reader that needs it — and not `padd`,
+    /// whose pad session a restart would take down for a key it re-reads by itself.
+    #[test]
+    fn the_autonomy_switch_restarts_autod_only() {
+        let mut m = model("");
+        m.edit(entry("autonomous.enabled"), "true").expect("valid");
+        let plan = plan_for(&m);
+        assert_eq!(plan.restart, vec!["autod"]);
+        assert!(plan.live.is_empty());
     }
 
     /// `[pad]` and `[pad_imu_head_control]` are live: padd re-reads them, so there is nothing to offer.

@@ -155,16 +155,17 @@ struct Args {
     #[arg(long, default_value_t = 0.1)]
     deadzone: f64,
 
-    /// Full-deflection forward/strafe speed, m/s. The prototype's alpha default.
-    #[arg(long, default_value_t = 0.3)]
+    /// Full-deflection forward/strafe speed, m/s. The prototype's alpha default, shared with the
+    /// autonomous brain through `robotd_params::drive`.
+    #[arg(long, default_value_t = robotd_params::drive::MAX_LINEAR)]
     max_linear: f64,
 
     /// Full-deflection backward speed, m/s — the prototype caps reverse separately.
-    #[arg(long, default_value_t = 0.3)]
+    #[arg(long, default_value_t = robotd_params::drive::MAX_LINEAR)]
     max_linear_backward: f64,
 
     /// Full-deflection turn rate, rad/s.
-    #[arg(long, default_value_t = 1.5)]
+    #[arg(long, default_value_t = robotd_params::drive::MAX_ANGULAR)]
     max_angular: f64,
 
     /// Full-deflection head travel, radians. The head command feeds the policy's
@@ -299,20 +300,25 @@ fn read_bindings(
 ) -> (
     robotd_params::PadParams,
     robotd_params::PadImuHeadControlParams,
+    robotd_params::AutonomousParams,
 ) {
     match robotd_params::Params::load(path, false) {
         Ok(params) => {
             let pad = params.pad;
             let imu_head = params.pad_imu_head_control;
+            let autonomous = params.autonomous;
             tracing::info!(
                 a = %pad.a, x = %pad.x, lb = %pad.lb, rb = %pad.rb,
                 dpad_down = %pad.dpad_down,
                 pad_imu_head_control = imu_head.enabled, pad_imu_head_gain = imu_head.gain,
+                autonomous = autonomous.enabled, pad_idle_s = autonomous.pad_idle_s,
                 "button bindings"
             );
-            (pad, imu_head)
+            (pad, imu_head, autonomous)
         }
         Err(e) => {
+            // Autonomy off on a file that will not parse: the pad then drives the way it always
+            // has, which is the one mode that cannot surprise whoever is holding it.
             tracing::warn!(
                 error = %e,
                 path = %path.display(),
@@ -321,8 +327,80 @@ fn read_bindings(
             (
                 robotd_params::PadParams::default(),
                 robotd_params::PadImuHeadControlParams::default(),
+                robotd_params::AutonomousParams::default(),
             )
         }
+    }
+}
+
+/// Whether the pad is driving, when the duck has a brain of its own (`[autonomous] enabled`).
+///
+/// Nothing in `robotd` arbitrates between drivers, so the handoff is this process keeping quiet.
+/// A pad that is merely connected sends nothing: its heartbeat would hold `move.source` at
+/// `padd` forever, and the brain yields to that. Touching it engages it, and it then drives
+/// exactly as it always has. `pad_idle_s` after the last touch it lets go — one zero twist, so
+/// the robot stops on the pad's word rather than on the deadman — and goes quiet again.
+/// `docs/design/autonomous.md` §3.
+///
+/// With autonomy off this always says [`Engage::Drive`], so nothing changes for a duck without a
+/// brain.
+#[derive(Debug, Default, Clone, Copy)]
+struct Engagement {
+    last_touch: Option<Instant>,
+    engaged: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Engage {
+    /// Send this tick's continuous intents.
+    Drive,
+    /// The idle time just ran out: stop the robot once, then stay silent.
+    LetGo,
+    /// Send nothing continuous.
+    Silent,
+}
+
+impl Engagement {
+    fn tick(
+        &mut self,
+        touched: bool,
+        now: Instant,
+        autonomy: &robotd_params::AutonomousParams,
+    ) -> Engage {
+        if !autonomy.enabled {
+            self.engaged = true;
+            return Engage::Drive;
+        }
+        if touched {
+            if !self.engaged {
+                tracing::warn!("pad touched — driving; the duck's own brain steps aside");
+            }
+            self.last_touch = Some(now);
+            self.engaged = true;
+            return Engage::Drive;
+        }
+        let idle = Duration::from_secs_f64(autonomy.pad_idle_s);
+        let fresh = self
+            .last_touch
+            .is_some_and(|at| now.duration_since(at) < idle);
+        match (self.engaged, fresh) {
+            (true, true) => Engage::Drive,
+            (true, false) => {
+                self.engaged = false;
+                tracing::warn!(
+                    idle_s = autonomy.pad_idle_s,
+                    "pad untouched — letting go; the duck takes back over"
+                );
+                Engage::LetGo
+            }
+            (false, _) => Engage::Silent,
+        }
+    }
+
+    /// The pad went away: whatever it was doing, it is not driving now, and the next pad starts
+    /// silent until touched.
+    fn reset(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -370,6 +448,7 @@ fn head_from_pad(relative: [f32; 4], gain: f64, max_head: f64) -> proto::HeadPar
         head_pitch: angle(pitch),
         head_yaw: angle(yaw),
         head_roll: -angle(roll),
+        alpha: None,
     }
 }
 
@@ -426,6 +505,18 @@ fn main() -> std::process::ExitCode {
 
     let mut next_id = 1u64;
 
+    // Named, so `robot.state.move.source` says when the pad is the one driving — which is how the
+    // autonomous brain knows to step aside. A robot too old to take the name refuses the hello;
+    // that is logged by `request` and changes nothing about driving.
+    let hello = proto::Call::Hello(proto::HelloParams {
+        api_version: proto::API_VERSION,
+        client: Some("padd".to_owned()),
+    });
+    if let Err(e) = request(&mut stream, &mut next_id, &hello) {
+        tracing::error!(error = %e, "cannot reach robotd");
+        return std::process::ExitCode::FAILURE;
+    }
+
     // Which robot is this? A roller duck wants the roller stick shaping. Asked once at startup,
     // then kept in step by the D-pad-up switch below — which is this process asking for the
     // change, so it knows the answer without asking again.
@@ -449,7 +540,8 @@ fn main() -> std::process::ExitCode {
     // The button bindings, read once like every other daemon reads its config. A file that will
     // not parse is not a reason to leave somebody without a pad: the mapping the prototype had is
     // the fallback, and the reason is logged.
-    let (mut bindings, mut imu_head_cfg) = read_bindings(&args.config);
+    let (mut bindings, mut imu_head_cfg, mut autonomy) = read_bindings(&args.config);
+    let mut engagement = Engagement::default();
     // When the file was last written, so a change is picked up without a restart. `padd` holds
     // no motor control and no session state — the whole of it is this table — so re-reading is a
     // swap between two ticks rather than anything to sequence.
@@ -489,7 +581,7 @@ fn main() -> std::process::ExitCode {
             let now = config_mtime(&args.config);
             if now != bindings_at {
                 bindings_at = now;
-                (bindings, imu_head_cfg) = read_bindings(&args.config);
+                (bindings, imu_head_cfg, autonomy) = read_bindings(&args.config);
                 tracing::warn!("button bindings reloaded");
             }
         }
@@ -567,6 +659,7 @@ fn main() -> std::process::ExitCode {
             dpad_up_held_since = None;
             mode_switch_sent = false;
             imu_head = PadImuHead::Off;
+            engagement.reset();
             if let Some(tap) = tap.as_ref() {
                 tap.idle();
             }
@@ -839,6 +932,49 @@ fn main() -> std::process::ExitCode {
         let rt = trigger(Button::RightTrigger2);
         let lt = trigger(Button::LeftTrigger2);
         let mouth = rt.max(lt);
+
+        // Anything a person does with the pad. The presses above already went out — a press is a
+        // touch, so it engages the pad in the same tick — and this decides whether the continuous
+        // stream below does.
+        let touched = toggle_enable
+            || toggle_head
+            || toggle_body
+            || !pressed.is_empty()
+            || select_released
+            || reboot_motors
+            || [Button::Select, Button::West, Button::DPadUp]
+                .into_iter()
+                .any(|b| pad.is_pressed(b))
+            || [left_x, left_y, right_x, right_y]
+                .into_iter()
+                .any(|v| v != 0.0)
+            || mouth > args.deadzone
+            || matches!(imu_head, PadImuHead::Following { .. });
+        match engagement.tick(touched, tick, &autonomy) {
+            Engage::Drive => {}
+            Engage::LetGo => {
+                prev_rt = 0.0;
+                prev_lt = 0.0;
+                // The next engagement must go out on its first tick, not wait out a heartbeat.
+                continuous = Continuous::default();
+                for call in [
+                    proto::Call::RobotMove(proto::MoveParams::default()),
+                    proto::Call::RobotMouth(proto::MouthParams { open: 0.0 }),
+                ] {
+                    if let Err(e) = notify(&mut stream, &call) {
+                        tracing::error!(error = %e, "send failed");
+                        return std::process::ExitCode::FAILURE;
+                    }
+                }
+                std::thread::sleep(period.saturating_sub(tick.elapsed()));
+                continue;
+            }
+            Engage::Silent => {
+                std::thread::sleep(period.saturating_sub(tick.elapsed()));
+                continue;
+            }
+        }
+
         if let Err(e) = notify(
             &mut stream,
             &proto::Call::RobotMouth(proto::MouthParams { open: mouth }),
@@ -927,6 +1063,7 @@ fn main() -> std::process::ExitCode {
                     head_pitch: -left_y * args.max_head,
                     head_yaw: -left_x * args.max_head,
                     head_roll: right_x * args.max_head,
+                    alpha: None,
                 }));
             }
             Mode::BodyPose => {
@@ -1101,6 +1238,65 @@ mod tests {
     use super::*;
     use std::io::Read;
 
+    fn autonomy(enabled: bool) -> robotd_params::AutonomousParams {
+        robotd_params::AutonomousParams {
+            enabled,
+            pad_idle_s: 30.0,
+        }
+    }
+
+    /// Without a brain, the pad is the robot's only driver and must never go quiet — a pad that
+    /// stopped heartbeating because nobody touched it would put `deadman` in every frame.
+    #[test]
+    fn without_autonomy_the_pad_always_drives() {
+        let mut e = Engagement::default();
+        let t0 = Instant::now();
+        assert_eq!(e.tick(false, t0, &autonomy(false)), Engage::Drive);
+        assert_eq!(
+            e.tick(false, t0 + Duration::from_secs(3600), &autonomy(false)),
+            Engage::Drive
+        );
+    }
+
+    /// With a brain: silent until touched, driving while touched, one let-go after the idle time,
+    /// then silent — and a touch after that engages again at once.
+    #[test]
+    fn with_autonomy_the_pad_drives_only_while_touched() {
+        let on = autonomy(true);
+        let mut e = Engagement::default();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        assert_eq!(
+            e.tick(false, t0, &on),
+            Engage::Silent,
+            "connected, untouched"
+        );
+        assert_eq!(e.tick(true, at(1), &on), Engage::Drive);
+        assert_eq!(
+            e.tick(false, at(20), &on),
+            Engage::Drive,
+            "inside the idle time"
+        );
+        assert_eq!(e.tick(false, at(31), &on), Engage::LetGo, "exactly once");
+        assert_eq!(e.tick(false, at(32), &on), Engage::Silent);
+        assert_eq!(e.tick(true, at(40), &on), Engage::Drive);
+    }
+
+    /// A pad that drops and comes back must not resume driving on the strength of a touch made
+    /// to the pad before it left.
+    #[test]
+    fn a_pad_that_comes_back_starts_silent() {
+        let on = autonomy(true);
+        let mut e = Engagement::default();
+        let t0 = Instant::now();
+        assert_eq!(e.tick(true, t0, &on), Engage::Drive);
+        e.reset();
+        assert_eq!(
+            e.tick(false, t0 + Duration::from_secs(1), &on),
+            Engage::Silent
+        );
+    }
+
     /// A socket pair standing in for `robotd`, and what came out of it.
     ///
     /// Non-blocking on the reading end so a test can assert that *nothing* was sent, which
@@ -1235,6 +1431,7 @@ mod tests {
                 head_pitch: 0.0,
                 head_yaw: 0.0,
                 head_roll: 0.0,
+                alpha: None,
             }),
         ];
 
