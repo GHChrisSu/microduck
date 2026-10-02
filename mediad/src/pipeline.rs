@@ -745,17 +745,7 @@ pub fn start(
     Ok((pipeline, channels_rx, frames, stream_branch))
 }
 
-/// Take the pipeline to `NULL` and let it go, for a stop rather than a crash.
-///
-/// `NULL` is what makes `v4l2src` release the camera and `webrtcsink` tear down its per-consumer
-/// session pipelines. It also flushes the bus, which is what ends [`watch_bus`]'s thread.
-pub fn stop(pipeline: gst::Pipeline) {
-    if let Err(e) = pipeline.set_state(gst::State::Null) {
-        tracing::warn!(error = %e, "the pipeline would not go to NULL");
-    }
-}
-
-/// `gst_deinit`, if a tracer is loaded. Call last, once [`stop`] has run and the runtime is gone.
+/// `gst_deinit`, if a tracer is loaded. Call last, once the pipeline is NULL and the runtime is gone.
 ///
 /// **Tracers write their results in `dispose()`, and `dispose()` runs here.** `buffer-lateness`,
 /// `queue-levels` and `pad-push-timings` all collect in memory and write their CSV only then, so

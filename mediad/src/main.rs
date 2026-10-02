@@ -701,7 +701,11 @@ fn main() -> ExitCode {
             ));
         };
 
-        mediad::pipeline::stop(pipeline);
+        // NULL releases the camera, tears down `webrtcsink`'s session pipelines, and flushes the
+        // bus, which ends the bus-watch thread.
+        if let Err(e) = gstreamer::prelude::ElementExt::set_state(&pipeline, gstreamer::State::Null) {
+            tracing::warn!(error = %e, "the pipeline would not go to NULL");
+        }
         code
     });
 
