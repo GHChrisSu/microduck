@@ -745,6 +745,38 @@ pub fn start(
     Ok((pipeline, channels_rx, frames, stream_branch))
 }
 
+/// Take the pipeline to `NULL` and let it go, for a stop rather than a crash.
+///
+/// `NULL` is what makes `v4l2src` release the camera and `webrtcsink` tear down its per-consumer
+/// session pipelines. It also flushes the bus, which is what ends [`watch_bus`]'s thread.
+pub fn stop(pipeline: gst::Pipeline) {
+    if let Err(e) = pipeline.set_state(gst::State::Null) {
+        tracing::warn!(error = %e, "the pipeline would not go to NULL");
+    }
+}
+
+/// `gst_deinit`, if a tracer is loaded. Call last, once [`stop`] has run and the runtime is gone.
+///
+/// **Tracers write their results in `dispose()`, and `dispose()` runs here.** `buffer-lateness`,
+/// `queue-levels` and `pad-push-timings` all collect in memory and write their CSV only then, so
+/// a process that never deinits has them measure everything and write nothing — which is what
+/// `mediad` did, because systemd's SIGTERM used to kill it outright.
+///
+/// Only when `GST_TRACERS` is set, because nothing else needs it and it is not free of risk:
+/// `deinit` requires that no GStreamer object is used afterwards, and a `media.stream` H.264
+/// session's encoder thread is not joined on the way out. That is acceptable for a debugging
+/// session that asked for tracers, not for every robot stopping for every update.
+pub fn deinit_if_tracing() {
+    if std::env::var_os("GST_TRACERS").is_none() {
+        return;
+    }
+    tracing::info!("deinitialising GStreamer so the tracers write their logs");
+    // SAFETY: called once, at the end of `main`, after the pipeline is NULL and dropped and the
+    // runtime holding every other element handle has shut down. See above for the one thread
+    // that is not joined, and why that is tolerated only here.
+    unsafe { gst::deinit() };
+}
+
 /// Build the valved H.264 branch: `queue ! valve ! videorate ! videoscale ! videoconvert ! enc !
 /// parse ! appsink`.
 ///

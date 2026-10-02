@@ -291,7 +291,7 @@ fn main() -> ExitCode {
         mediad::pipeline::Rotation::None
     };
 
-    runtime.block_on(async move {
+    let code = runtime.block_on(async move {
         // The console, before the pipeline: it is the page that says a robot's pipeline would not
         // start, so it should be up first — and it needs nothing from GStreamer.
         //
@@ -428,7 +428,7 @@ fn main() -> ExitCode {
         // `get_frame` surface in `architecture.md` §5.3 is what the rest of it is for. The branch
         // runs from the start rather than being added later, because a tee inserted into a live
         // pipeline is a different and much harder problem than a tee that was always there.
-        let (_pipeline, mut channels, frames, stream_branch) = match mediad::pipeline::start(
+        let (pipeline, mut channels, frames, stream_branch) = match mediad::pipeline::start(
             source.clone(),
             &producer,
             &settings,
@@ -623,7 +623,24 @@ fn main() -> ExitCode {
         // One session per peer, each with its own connections to the services it talks to. Per
         // peer rather than shared, so one peer's minutes-long update cannot silence another's
         // telemetry — which is the same reason a session keeps one connection per lane.
-        while let Some(channel) = channels.recv().await {
+        //
+        // Until SIGTERM: `systemctl stop` used to kill this process outright, so the pipeline
+        // never reached NULL and GStreamer's tracers never wrote what they had measured.
+        let stopping = shutdown();
+        tokio::pin!(stopping);
+        let code = loop {
+            let channel = tokio::select! {
+                channel = channels.recv() => channel,
+                () = &mut stopping => {
+                    tracing::info!("stopping");
+                    break ExitCode::SUCCESS;
+                }
+            };
+            let Some(channel) = channel else {
+                // The pipeline outlived its consumers: `webrtcsink` stopped producing them.
+                tracing::warn!("no longer accepting peers");
+                break ExitCode::FAILURE;
+            };
             let (replies_tx, mut replies_rx) = tokio::sync::mpsc::channel::<String>(256);
             let pool = mediad::upstream::Pool::new(sockets.clone(), replies_tx);
 
@@ -682,12 +699,36 @@ fn main() -> ExitCode {
                 // handed over a consumer, so by definition there is media behind it.
                 Some(media.clone()),
             ));
-        }
+        };
 
-        // The pipeline outlived its consumers, which means `webrtcsink` stopped producing them.
-        tracing::warn!("no longer accepting peers");
-        ExitCode::FAILURE
-    })
+        mediad::pipeline::stop(pipeline);
+        code
+    });
+
+    // Every task still holding an element handle — sessions, the streamer — goes with the
+    // runtime, and that has to happen before GStreamer does. Bounded, so a task stuck in a
+    // blocking call cannot hold up a stop that systemd is timing.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    mediad::pipeline::deinit_if_tracing();
+    code
+}
+
+/// Resolve on SIGTERM (systemd stop) or SIGINT (Ctrl-C). The same as `configd`'s.
+#[cfg(any(target_os = "linux", feature = "gstreamer"))]
+async fn shutdown() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot listen for SIGTERM");
+            return std::future::pending().await;
+        }
+    };
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = tokio::signal::ctrl_c() => {}
+    }
 }
 
 /// Built without a pipeline: the rest of the crate is portable and its tests run anywhere, which is
