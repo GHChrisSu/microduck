@@ -1234,10 +1234,23 @@ fn bridge_gstreamer_log() {
 ///
 /// A dedicated thread rather than `bus.add_watch`, which needs a GLib main loop this daemon does
 /// not run, and rather than a tokio task, because `timed_pop` blocks.
+///
+/// It also writes a `.dot` graph of the pipeline at each of its state changes and on an error, as
+/// `gst-launch-1.0` does. That is free unless `GST_DEBUG_DUMP_DOT_DIR` is set: GStreamer reads it
+/// at init and the dump is a no-op without it. `webrtcsink`'s per-consumer session pipelines are
+/// not children of this one, so they are not in these graphs; the `pipeline-snapshot` tracer is
+/// what reaches them.
 fn watch_bus(pipeline: &gst::Pipeline) {
     let Some(bus) = pipeline.bus() else {
         tracing::warn!("the pipeline has no bus; media failures will be silent");
         return;
+    };
+    // Weak, so this thread does not keep the pipeline alive past the daemon's own teardown.
+    let weak = pipeline.downgrade();
+    let dump = move |name: String| {
+        if let Some(p) = weak.upgrade() {
+            p.debug_to_dot_file(gst::DebugGraphDetails::all(), format!("mediad.{name}"));
+        }
     };
     std::thread::Builder::new()
         .name("gst-bus".into())
@@ -1259,6 +1272,15 @@ fn watch_bus(pipeline: &gst::Pipeline) {
                             detail = e.debug().unwrap_or_default().as_str(),
                             "pipeline error"
                         );
+                        dump("error".into());
+                    }
+                    // The pipeline's own transitions only; its elements post one each as well.
+                    gst::MessageView::StateChanged(s)
+                        if msg
+                            .src()
+                            .is_some_and(|o| o.type_().is_a(gst::Pipeline::static_type())) =>
+                    {
+                        dump(format!("{:?}_{:?}", s.old(), s.current()).to_uppercase());
                     }
                     gst::MessageView::Warning(w) => {
                         tracing::warn!(
