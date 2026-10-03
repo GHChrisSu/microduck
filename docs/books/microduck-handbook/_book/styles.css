@@ -1,0 +1,207 @@
+/* Shared by the searchable HTML edition and the reflowable EPUB. */
+:root {
+  --book-ink: #18333b;
+  --book-muted: #587077;
+  --book-accent: #b86b38;
+  --book-paper: #fbfaf5;
+  --book-wash: #eef4f1;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  color: var(--book-ink);
+  background: var(--book-paper);
+  font-family: "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 1.03rem;
+  line-height: 1.85;
+  letter-spacing: 0.012em;
+}
+
+#quarto-content,
+.page-columns {
+  max-width: 76rem;
+  min-width: 0;
+}
+
+main.content {
+  max-width: 48rem;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 1.5rem clamp(1rem, 4vw, 3rem) 4rem;
+}
+
+#title-block-header,
+.quarto-title,
+#title-block-header .quarto-title h1.title {
+  min-width: 0;
+  max-width: 100%;
+}
+
+h1, h2, h3, h4 {
+  color: #163f49;
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: 0.015em;
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  margin-top: 1.5rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 2px solid #d9e6df;
+  font-size: clamp(1.7rem, 5vw, 2.35rem);
+}
+
+#title-block-header .quarto-title h1.title {
+  font-size: clamp(1.35rem, 5vw, 1.85rem) !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+#title-block-header .quarto-title h1.title .chapter-title {
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+h2 {
+  margin-top: 2.2rem;
+  font-size: 1.42rem;
+}
+
+h3 {
+  margin-top: 1.7rem;
+  font-size: 1.16rem;
+}
+
+p {
+  margin: 0.9rem 0;
+  text-align: justify;
+  text-justify: inter-ideograph;
+  overflow-wrap: anywhere;
+  widows: 2;
+  orphans: 2;
+}
+
+li {
+  margin: 0.32rem 0;
+}
+
+a {
+  color: #176a70;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16em;
+  overflow-wrap: anywhere;
+}
+
+blockquote,
+.callout {
+  margin: 1.4rem 0;
+  padding: 0.8rem 1.1rem;
+  border-left: 4px solid var(--book-accent);
+  border-radius: 0 0.45rem 0.45rem 0;
+  background: var(--book-wash);
+  color: #284d51;
+}
+
+table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+th {
+  background: #e5eeea;
+  color: #163f49;
+  text-align: left;
+}
+
+th, td {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d8e1dc;
+  vertical-align: top;
+}
+
+pre, code {
+  font-family: "SFMono-Regular", "Cascadia Code", "Noto Sans Mono CJK SC",
+    Menlo, monospace;
+}
+
+pre {
+  max-width: 100%;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #dce5e0;
+  border-radius: 0.5rem;
+  background: #f1f4f1;
+  line-height: 1.55;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+pre code {
+  white-space: pre !important;
+  overflow-wrap: normal !important;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+#quarto-sidebar {
+  font-size: 0.9rem;
+}
+
+@media (max-width: 700px) {
+  body {
+    font-size: 1rem;
+    line-height: 1.9;
+  }
+
+  main.content {
+    padding: 1rem 1rem 3rem;
+  }
+
+  h1 {
+    font-size: clamp(1.4rem, 5.8vw, 1.8rem);
+    overflow-wrap: anywhere;
+  }
+
+  table {
+    font-size: 0.88em;
+  }
+
+  th, td {
+    padding: 0.45rem;
+  }
+}
+
+/* EPUB readers ignore some browser styles but honor these paged-media hints. */
+@media print {
+  h1 {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  h1:first-child {
+    break-before: auto;
+    page-break-before: auto;
+  }
+
+  p, li {
+    widows: 2;
+    orphans: 2;
+  }
+
+  pre, table, blockquote {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

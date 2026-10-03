@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN" xml:lang="zh-CN"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="description" content="从 Rust 机器人运行时、传感器与安全，到强化学习、MuJoCo 仿真、YOLO 视觉和人物跟随， 一步步读懂 MicroDuck 工程，并探索陪伴、教育、互动展演等应用方向。">
+
+<title>第二十二章：这只鸭子还能做什么 – 从仿真鸭到会跟随的机器人</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<link href="../chapters/A-module-index.html" rel="next">
+<link href="../chapters/21-extending-the-project.html" rel="prev">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-36f2db2e0c24a8dfe38894d2c7306603.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "sidebar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "start",
+  "type": "textbox",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "没有结果",
+    "search-matching-documents-text": "匹配的文档",
+    "search-copy-link-title": "复制搜索链接",
+    "search-hide-matches-text": "隐藏其他匹配项",
+    "search-more-match-text": "更多匹配结果",
+    "search-more-matches-text": "更多匹配结果",
+    "search-clear-button-title": "清除",
+    "search-text-placeholder": "搜索",
+    "search-detached-cancel-button-title": "取消",
+    "search-submit-button-title": "搜索",
+    "search-label": "搜索"
+  }
+}</script>
+<style>html{ scroll-behavior: smooth; }</style>
+
+
+<link rel="stylesheet" href="../styles.css">
+</head>
+
+<body class="nav-sidebar floating quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="切换侧边栏" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../chapters/22-application-scenarios.html"><span class="chapter-title">第二十二章：这只鸭子还能做什么</span></a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="切换侧边栏" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+      <button type="button" class="btn quarto-search-button" aria-label="搜索" onclick="window.quartoOpenSearch();">
+        <i class="bi bi-search"></i>
+      </button>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="pt-lg-2 mt-2 text-left sidebar-header">
+    <div class="sidebar-title mb-0 py-0">
+      <a href="../">从仿真鸭到会跟随的机器人</a> 
+    </div>
+      </div>
+        <div class="mt-2 flex-shrink-0 align-items-center">
+        <div class="sidebar-search">
+        <div id="quarto-search" class="" title="搜索"></div>
+        </div>
+        </div>
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">写在前面</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/01-learning-map.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第一章：先把整个系统想成一条数据流</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/02-repository-map.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第二章：Rust 运行时的工程地图</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/03-robotd-control-loop.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第三章：50 Hz 控制循环怎样让鸭子站稳</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/04-ipc-api.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第四章：IPC 是服务之间的公共语言</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/05-safety-and-tools.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第五章：安全、控制意图与日常工具</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/06-sensors-and-geometry.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第六章：传感器、坐标系与“鸭子走了多远”</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/07-camera-and-webrtc.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第七章：相机、视频和 WebRTC</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/08-ble-and-gamepad.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第八章：BLE、手机入口和手柄输入</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/09-sound-and-behavior.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第九章：声音、个性和更高层行为</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/10-updates-and-recovery.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十章：更新、策略包与故障恢复</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/11-build-and-release.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十一章：从本地代码到板端版本</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/12-rl-repository.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十二章：强化学习仓库是怎样组织的</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/13-model-actuator-and-backlash.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十三章：MJCF、舵机模型和机械间隙</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/14-mdp-and-policy-contract.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十四章：MDP 怎样变成机器人能执行的 ONNX 策略</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/15-training-tasks.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十五章：训练任务不是一张扁平清单</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/16-export-and-deploy.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十六章：训练、导出、发布和部署</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/17-simulation.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十七章：MuJoCo 仿真怎样接入真实运行时</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/18-vision-detection.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十八章：YOLO、物体类别与距离估计</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/19-person-following.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第十九章：从人的检测框到鸭子的跟随命令</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/20-debugging-lab.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第二十章：把“鸭子没动”拆成可复现的检查</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/21-extending-the-project.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">第二十一章：下一步怎样把跟随做得更可靠</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/22-application-scenarios.html" class="sidebar-item-text sidebar-link active"><span class="chapter-title">第二十二章：这只鸭子还能做什么</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">附录</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="切换章节">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/A-module-index.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">附录 A：完整模块索引</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/B-command-reference.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">附录 B：学习路径命令速查</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../chapters/C-glossary.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">附录 C：术语表</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../production-comparison.html" class="sidebar-item-text sidebar-link"><span class="chapter-title">附录 D：成书方案与写作技能对比</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">目录</h2>
+   
+  <ul class="collapse">
+  <li><a href="#先看清这只鸭子的长处" id="toc-先看清这只鸭子的长处" class="nav-link active" data-scroll-target="#先看清这只鸭子的长处">先看清这只鸭子的长处</a></li>
+  <li><a href="#场景一桌面陪伴与有性格的机器人" id="toc-场景一桌面陪伴与有性格的机器人" class="nav-link" data-scroll-target="#场景一桌面陪伴与有性格的机器人">场景一：桌面陪伴与有性格的机器人</a></li>
+  <li><a href="#场景二机器人与人工智能教育" id="toc-场景二机器人与人工智能教育" class="nav-link" data-scroll-target="#场景二机器人与人工智能教育">场景二：机器人与人工智能教育</a></li>
+  <li><a href="#场景三互动故事里的实体角色" id="toc-场景三互动故事里的实体角色" class="nav-link" data-scroll-target="#场景三互动故事里的实体角色">场景三：互动故事里的实体角色</a></li>
+  <li><a href="#场景四博物馆校园和品牌展台的迎宾角色" id="toc-场景四博物馆校园和品牌展台的迎宾角色" class="nav-link" data-scroll-target="#场景四博物馆校园和品牌展台的迎宾角色">场景四：博物馆、校园和品牌展台的迎宾角色</a></li>
+  <li><a href="#场景五多只鸭子的合奏和群体表演" id="toc-场景五多只鸭子的合奏和群体表演" class="nav-link" data-scroll-target="#场景五多只鸭子的合奏和群体表演">场景五：多只鸭子的合奏和群体表演</a></li>
+  <li><a href="#场景六跟随远程在场与轻量巡游" id="toc-场景六跟随远程在场与轻量巡游" class="nav-link" data-scroll-target="#场景六跟随远程在场与轻量巡游">场景六：跟随、远程在场与轻量巡游</a></li>
+  <li><a href="#场景七机器人学习与具身智能实验平台" id="toc-场景七机器人学习与具身智能实验平台" class="nav-link" data-scroll-target="#场景七机器人学习与具身智能实验平台">场景七：机器人学习与具身智能实验平台</a></li>
+  <li><a href="#哪些任务暂时不适合" id="toc-哪些任务暂时不适合" class="nav-link" data-scroll-target="#哪些任务暂时不适合">哪些任务暂时不适合</a></li>
+  <li><a href="#从畅想到第一个原型" id="toc-从畅想到第一个原型" class="nav-link" data-scroll-target="#从畅想到第一个原型">从畅想到第一个原型</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title"><span class="chapter-title">第二十二章：这只鸭子还能做什么</span></h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>人物跟随让鸭子表现出一种很直观的能力：它能看见一个目标，并用身体走向目标。但“会跟着人走”只是交互方式之一。MicroDuck 更值得探索的方向，是让一个小型双足机器人用动作、声音和一点自主性成为房间里的角色、课堂里的实验对象，或研究者手边的机器人平台。</p>
+<p>本章会畅想应用，也会标明能力边界。下面的场景是根据当前工程模块提出的设计方向，不代表这些产品功能已经完成，也不构成项目承诺。每个想法都要经过仿真、硬件验证、安全测试和用户体验验证。</p>
+<section id="先看清这只鸭子的长处" class="level2">
+<h2 class="anchored" data-anchor-id="先看清这只鸭子的长处">先看清这只鸭子的长处</h2>
+<p>MicroDuck 是一台体量很小的双足机器人：身高约 25 厘米，重量约 800 克，身体有 15 个舵机，其中行走策略输出 14 维动作。它能站立、迈步、转向、摆头、发声，也能接收相机、麦克风、ToF 深度和无线消息等信息。开发环境还提供 MuJoCo 仿真、强化学习训练和人物跟随实验。</p>
+<p>这些特征决定了它更像一个能移动和表达的“实体角色”，而不是缩小版的家用人形机器人。它没有手，无法可靠拿杯子、开门或整理物品；体型和电池也不适合承担重载、长时间巡逻或身体辅助。它的优势在于可见、可听、能动、能被编程，也能让开发者把软件决策与真实的身体运动联系起来。</p>
+<p>可以用三个问题筛选应用：机器人能不能通过动作或声音提供有意义的反馈？任务能不能在小范围内安全完成？失败之后，机器人能不能停下来并让人在场接管？三个问题都能回答“能”，这个场景就值得先做原型。</p>
+</section>
+<section id="场景一桌面陪伴与有性格的机器人" class="level2">
+<h2 class="anchored" data-anchor-id="场景一桌面陪伴与有性格的机器人">场景一：桌面陪伴与有性格的机器人</h2>
+<p>陪伴不必从“鸭子能聊天”开始。一个更可实现的版本，是让它听到熟悉的声音后转头，看到人靠近后抬头问候，空闲时做轻微动作；用户离开时恢复安静。动作、音色、反应节奏和偶尔出现的小习惯共同构成性格。</p>
+<p>当前可以复用 <code>robot.look</code>、行走意图、声音合成、麦克风事件、ToF 手部距离跟踪和行为服务的接口。缺少的核心是统一的行为状态机：它需要维护“空闲、注意到声音、正在互动、疲劳或低电量”等状态，规定状态进入和退出条件，并在打断或故障时停止动作。<code>docs/ideas/autonomous_behavior.md</code> 收集了一些候选行为，例如问候、惊吓反应、打盹、被抚摸反应和情绪能量模型；它目前是构想清单，不能当作已经合并到 robotd 的功能说明。</p>
+<p>后续可以让用户给鸭子起名字、选择声音和互动频率，或在本机保存用户许可的有限偏好。不过，“记住某个人”会牵涉身份识别、数据保存与删除。早期原型可以只记住本次会话里的互动，不采集或上传人脸，不持续录音。陪伴价值来自可预测又略有惊喜的回应，不需要把摄像头和麦克风一直打开。</p>
+</section>
+<section id="场景二机器人与人工智能教育" class="level2">
+<h2 class="anchored" data-anchor-id="场景二机器人与人工智能教育">场景二：机器人与人工智能教育</h2>
+<p>教育是当前工程结构很适合支持的方向。学生可以先用命令让鸭子走一步，再读懂 50 Hz 控制循环；随后检查策略输入和输出合同，修改奖励函数，在 MuJoCo 中训练步态，最后比较仿真策略和真实身体的差异。</p>
+<p>同一只鸭子可以服务不同难度的课程：初学者调速度和转向；进阶课程写目标检测与跟随状态机；更高阶课程调整 PPO 奖励、观测量和随机化参数。每节课都可以留下可测量的问题，例如“鸭子能否在目标偏离画面中心时边走边转”“速度命令过期后多久停下”“相机处理延迟增加会怎样影响跟随”。</p>
+<p>这条路线的好处是课程围绕真实代码和可重复实验展开。学生不仅训练一个模型，也会学习接口、传感器、时序、控制、安全停止和部署。仿真适合大量试错；实体机器人用来验证模型差异。课程应明确指出仿真成功不等于硬件安全，实体测试需要限速、保护空间和随时可用的停止方式。</p>
+</section>
+<section id="场景三互动故事里的实体角色" class="level2">
+<h2 class="anchored" data-anchor-id="场景三互动故事里的实体角色">场景三：互动故事里的实体角色</h2>
+<p>鸭子可以成为桌游、亲子故事或互动展项里的角色。故事系统告诉它“听见线索”“发现角色”“等待选择”或“庆祝成功”，鸭子用转头、靠近、退后、叫声和灯光（若硬件具备）表达反应。孩子不只是看屏幕动画，还能观察一个真实身体如何行动。</p>
+<p>可以从确定性脚本开始：每个故事节点规定可触发事件、动作和超时；相机或麦克风只负责提供事件候选，故事逻辑决定剧情分支。之后再增加物体识别，把“找到红色球”作为任务条件。YOLO 的通用类别不等于任意物品都能识别；专用物件通常需要检查类别覆盖、收集样本并评估误报，不能仅凭一次演示就假设它理解了整个房间。</p>
+<p>这个场景可先使用仿真中的固定舞台和低速动作，不需要自主穿越复杂家庭空间。故事是否好玩，也可以通过“等待是否太久、动作是否读得懂、错误识别是否能恢复”来评估，而不仅是模型准确率。</p>
+</section>
+<section id="场景四博物馆校园和品牌展台的迎宾角色" class="level2">
+<h2 class="anchored" data-anchor-id="场景四博物馆校园和品牌展台的迎宾角色">场景四：博物馆、校园和品牌展台的迎宾角色</h2>
+<p>在展台或校园活动中，鸭子可以站在一个明确的小区域里迎宾、播报短提示、对掌声做反应，或带观众完成一个简单的互动任务。动作编排可控，工作人员也能通过平板或手柄随时切换到停止或待机。</p>
+<p>这类环境通常比家庭更容易布置：活动区域有边界，路线预先规划，工作人员在场，观众知道自己正在和机器人互动。现有 WebRTC、游戏手柄、声音和动作接口可构成演示基础；实际部署还需做多小时稳定性、电池续航、拥挤时避让、音量控制和故障恢复测试。目标检测到有人，并不自动等同于人群安全导航。</p>
+<p>一个可验证的第一版可以完全不自由行走：定点转头和挥动身体，识别到观众进入视野后发出欢迎声。确定交互有效后，再逐步加入受限区域内的短距离移动。</p>
+</section>
+<section id="场景五多只鸭子的合奏和群体表演" class="level2">
+<h2 class="anchored" data-anchor-id="场景五多只鸭子的合奏和群体表演">场景五：多只鸭子的合奏和群体表演</h2>
+<p>如果几只鸭子能交换稳定身份、共享节拍并按节奏动作，单台机器人就变成了小型机器人乐队。它们可以轮流鸣叫、同步点头、排队移动，或者根据观众鼓掌触发一小段表演。小喇叭适合做有趣的音色和节奏纹理，不必追求完整交响效果。</p>
+<p>工程中已有声音合成和 chorale 群体节拍相关工作；BLE beacon、RSSI 和共享节拍也为“附近有没有同伴”“同伴是否更靠近”提供实验基础。不过，无线机制存在不确定性，距离只能粗略估计；多鸭子同步需要在实际板子和房间里验证延迟、丢包和重连。群体表演适合作为短时、可取消的演示，不适合作为需要严格同步的安全控制。</p>
+<p>有趣的扩展是让表演偶尔自发发生：鸭子检测到同伴后，先对拍，再决定是否合唱。这里的关键不在增加更多命令，而是设计清晰的社会规则和用户许可。用户应能关闭群体互动；关闭后，机器人应停止广播社交状态。</p>
+</section>
+<section id="场景六跟随远程在场与轻量巡游" class="level2">
+<h2 class="anchored" data-anchor-id="场景六跟随远程在场与轻量巡游">场景六：跟随、远程在场与轻量巡游</h2>
+<p>人物跟随是一个自然的方向：鸭子在场地里跟着主人移动，或由远程用户通过浏览器观察和短距离操控。后者提供一种“远程在场”的感觉，可以用于展示、课堂协作或轻松的远程问候。</p>
+<p>当前跟随实验使用 YOLO 识别画面中的人，再由普通控制逻辑生成转向和前进速度；robotd 调用已有步态策略执行移动。它还没有可靠的身份跟踪、米制距离闭环或家庭级地图导航。因此适合在开阔、受控、有人看护的场景里演示，不应把它描述成可以在陌生住宅里自主跟人、避开宠物和儿童的成品。</p>
+<p>走向可用的远程在场，需要的不止视频流：网络中断时要自动停下；本地要有物理或软件急停；相机和麦克风状态要清楚可见；房间地图和障碍物也需要处理。要做长期值守，还要测量续航、充电、断线恢复和服务更新。现阶段可以先做“远程观看 + 按住才移动”的受限体验，再逐项增加自治能力。</p>
+</section>
+<section id="场景七机器人学习与具身智能实验平台" class="level2">
+<h2 class="anchored" data-anchor-id="场景七机器人学习与具身智能实验平台">场景七：机器人学习与具身智能实验平台</h2>
+<p>对开发者而言，MicroDuck 也是一套从策略训练到身体执行的研究平台。可以研究步态泛化、域随机化、目标条件控制、视觉和深度融合、多机协同，以及高层任务如何调用低层运动策略。</p>
+<p>实验优势在于模块边界清晰：仿真身体更新动力学，robotd 管高频控制，感知脚本处理图像，高层状态机把任务转成运动意图。研究者可以分别测量每一层的延迟、成功率和失败恢复能力，然后比较“单独优化感知”“单独优化控制”和“端到端训练”带来的变化。</p>
+<p>真实的科研贡献来自有对照、有重复、有失败记录的实验，而不只是让鸭子完成一次看起来聪明的演示。每个实验应固定场景、记录软件版本和随机种子，报告碰撞、跌倒、目标丢失和安全停止等指标。仿真器能扩大样本量；真实硬件负责揭示模型没有覆盖的摩擦、延迟、供电和传感器问题。</p>
+</section>
+<section id="哪些任务暂时不适合" class="level2">
+<h2 class="anchored" data-anchor-id="哪些任务暂时不适合">哪些任务暂时不适合</h2>
+<p>有些愿望看上去很自然，但现在不应该交给这只鸭子独立完成：</p>
+<ul>
+<li>拿取、搬运和递交物品。它没有手部操作机构，也没有抓取和操作策略。</li>
+<li>在真实家庭中无人看管地巡逻、找人或穿过拥挤区域。尚缺成熟的定位、地图、动态障碍避让和失效保护。</li>
+<li>搀扶老人、保护幼儿或承担安全监控。机器人很轻小，当前感知和移动能力没有达到这种责任等级。</li>
+<li>把“识别到某物”当作理解其用途、位置和危险性。检测框是感知结果，不是常识推理或可靠任务规划。</li>
+</ul>
+<p>面对这些方向，可以把研究问题拆小：先让机器人识别“区域里有障碍”，再验证低速停止；先在模拟房间里跑固定路线，再测定位漂移；先做受监督的玩具互动，再评估误触与恢复。每一步都要定义失败时的安全状态。</p>
+</section>
+<section id="从畅想到第一个原型" class="level2">
+<h2 class="anchored" data-anchor-id="从畅想到第一个原型">从畅想到第一个原型</h2>
+<p>按“最容易验证价值，同时能复用现有模块”的顺序，可以先做三个原型：</p>
+<ol type="1">
+<li><strong>桌面问候角色</strong>：相机或声音提供一次性事件，状态机安排转头、叫声和超时回到安静状态；不保存身份。</li>
+<li><strong>课堂里的跟随实验</strong>：在仿真中改变目标速度、相机延迟和检测频率，记录目标丢失后的搜索与停止行为。</li>
+<li><strong>多鸭子节奏表演</strong>：先让两只机器人在固定位置同步点头和发声，再测试距离、掉线与用户关闭选项。</li>
+</ol>
+<p>这三种原型分别验证性格交互、感知到运动的闭环，以及群体协同。它们也覆盖 sounds、robotd 行为、相机、BLE、仿真和训练等不同工程模块。完成原型后，再用用户反馈决定要不要投入更复杂的导航、长期记忆或板端模型部署。</p>
+<p>判断一个应用是否值得继续，可以记住一句话：<strong>先找到鸭子用身体带来的独特价值，再确认它能在明确边界里可靠地表达这种价值。</strong></p>
+
+
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "已复制");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "已复制");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="../chapters/21-extending-the-project.html" class="pagination-link" aria-label="第二十一章：下一步怎样把跟随做得更可靠">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text"><span class="chapter-title">第二十一章：下一步怎样把跟随做得更可靠</span></span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="../chapters/A-module-index.html" class="pagination-link" aria-label="附录 A：完整模块索引">
+        <span class="nav-page-text"><span class="chapter-title">附录 A：完整模块索引</span></span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
+</div> <!-- /content -->
+
+
+
+
+<script src="../site_libs/quarto-html/zenscroll-min.js"></script>
+</body></html>

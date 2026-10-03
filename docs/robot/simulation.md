@@ -14,7 +14,8 @@ bus: every tick, joint positions, velocities and the IMU come in over a TCP sock
 process, and the policy's targets go back out. Everything above that seam — the control loop, the
 policy, safety, fall detection, kinematics, odometry, the whole IPC surface — is the code a robot
 runs, unchanged and unable to tell. `tofd --sim` gets its 8×8 depth frames from the same simulator;
-`mediad --sim-camera` gets a rendered head-camera image, mounted a quarter turn off like the real one.
+`mediad --sim-camera` gets a rendered head-camera image. The local simulator presents it upright in
+landscape; the physical camera's 90° mount rotation is still used on the robot.
 `configd` and `updaterd` run too, unchanged, which is what gives a simulated duck a serial, a name
 and a Hugging Face account it can be reached through from off this network.
 

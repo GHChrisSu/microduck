@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600" viewBox="0 0 1200 1600">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#102f39"/>
+      <stop offset="1" stop-color="#1c5960"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#f3c981"/>
+      <stop offset="1" stop-color="#df8d4d"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="1600" fill="url(#bg)"/>
+  <circle cx="900" cy="480" r="300" fill="#d6e8d9" opacity="0.09"/>
+  <circle cx="900" cy="480" r="218" fill="none" stroke="#f1c278" stroke-width="2" opacity="0.55"/>
+  <circle cx="900" cy="480" r="270" fill="none" stroke="#f1c278" stroke-width="1" opacity="0.27"/>
+  <path d="M0 1120 C220 1010 390 1190 600 1090 S980 1020 1200 1120 L1200 1600 L0 1600Z" fill="#153b45"/>
+  <path d="M0 1190 C250 1090 430 1275 660 1165 S1020 1120 1200 1190" fill="none" stroke="#a9c8b9" stroke-width="3" opacity="0.45"/>
+  <g transform="translate(590 655)">
+    <ellipse cx="82" cy="190" rx="196" ry="185" fill="#f1e7cc"/>
+    <ellipse cx="89" cy="210" rx="110" ry="106" fill="#d2b98b" opacity="0.48"/>
+    <circle cx="170" cy="42" r="102" fill="#f1e7cc"/>
+    <path d="M252 41 L355 77 L253 99Z" fill="#e38b46"/>
+    <circle cx="196" cy="21" r="12" fill="#16363d"/>
+    <circle cx="200" cy="17" r="4" fill="#fff5dc"/>
+    <path d="M-110 325 Q75 380 270 327" fill="none" stroke="#e38b46" stroke-width="17" stroke-linecap="round"/>
+    <path d="M-45 312 L-48 367 M182 316 L187 369" stroke="#e38b46" stroke-width="15" stroke-linecap="round"/>
+    <path d="M-172 171 Q-242 105 -246 9 Q-178 27 -121 120Z" fill="#f1e7cc"/>
+    <circle cx="116" cy="107" r="18" fill="#1c5960"/>
+    <path d="M108 107 L124 107 M116 99 L116 115" stroke="#d9eee3" stroke-width="3"/>
+  </g>
+  <g fill="none" stroke="#eac387" opacity="0.8">
+    <path d="M90 315 H370 M90 342 H290" stroke-width="3"/>
+    <circle cx="1030" cy="930" r="6" fill="#eac387"/>
+    <circle cx="990" cy="1000" r="4" fill="#eac387"/>
+    <circle cx="1085" cy="1015" r="5" fill="#eac387"/>
+    <path d="M1018 930 L990 1000 L1085 1015 Z" stroke-width="2"/>
+  </g>
+  <text x="92" y="175" fill="#c6ddd0" font-size="27" font-family="sans-serif" letter-spacing="8">MICRODUCK ENGINEERING</text>
+  <text x="92" y="264" fill="#f2cc8a" font-size="30" font-family="sans-serif" letter-spacing="5">工程学习手册</text>
+  <text x="92" y="420" fill="#fff5df" font-size="70" font-weight="700" font-family="sans-serif">从仿真鸭到</text>
+  <text x="92" y="510" fill="#fff5df" font-size="70" font-weight="700" font-family="sans-serif">会跟随的机器人</text>
+  <text x="94" y="585" fill="#c6ddd0" font-size="28" font-family="sans-serif">运行时 · 强化学习 · MuJoCo · YOLO 人物跟随</text>
+  <text x="94" y="1470" fill="#c6ddd0" font-size="24" font-family="sans-serif" letter-spacing="3">从模块地图，走到完整闭环</text>
+  <text x="94" y="1520" fill="#8fbaaa" font-size="18" font-family="sans-serif" letter-spacing="4">2026  /  MICRODUCK</text>
+</svg>

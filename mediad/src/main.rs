@@ -113,8 +113,8 @@ struct Args {
     /// whoever displays the video, and they rotate for free — the console with a CSS transform on
     /// the GPU. Rotating here cost 145% of a core and 22 fps; `pipeline::Rotation` has the numbers.
     ///
-    /// True of a simulated camera too: the one in MuJoCo is rolled to match the mount, so a frame
-    /// from a duck in the twin needs the same quarter turn as a frame from a duck on the desk.
+    /// A simulator can override this when it renders an upright landscape preview; the physical
+    /// camera continues to use the 90° mount correction.
     #[arg(long)]
     rotate: Option<u32>,
 
@@ -223,9 +223,8 @@ fn main() -> ExitCode {
     // Validated even when the pipeline will not use it, because it is still what every consumer is
     // told about the mount — a typo should not reach the console as a rotation nobody can apply.
     // 90 whatever the source. The head camera is mounted a quarter turn off and every consumer is
-    // told so — and the *simulated* camera is rolled the same way on purpose, so that a frame from a
-    // duck in MuJoCo needs the same turn as a frame from a duck on the desk. Overridable, because a
-    // scene could mount it differently, but there is one default and it is the robot's.
+    // told so. The local simulator may pass `--rotate 0` when it renders an upright landscape view;
+    // the default stays the physical robot's mount.
     let rotate = args.rotate.unwrap_or(90);
     let mount = match mediad::pipeline::Rotation::from_degrees(rotate) {
         Ok(rotation) => rotation,

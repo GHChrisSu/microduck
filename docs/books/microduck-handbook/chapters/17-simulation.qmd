@@ -1,0 +1,23 @@
+# 第十七章：MuJoCo 仿真怎样接入真实运行时
+
+仿真分为两个进程。microduck_rl 中的 duck-body 运行 MuJoCo，计算虚拟身体动力学；microduck 中的 robotd 使用 RemoteIo 作为身体 I/O。每个控制 tick，MuJoCo 服务端发回关节位置、速度和 IMU，robotd 将控制目标沿 TCP 通道送回模拟身体。
+
+## scripts/duck-sim 管什么
+
+scripts/duck-sim 把 Python body server、Rust daemon、模拟 ToF、mediad 相机和各个本机 socket 连起来。普通 up 模式直接以当前用户启动进程，启动快，适合日常迭代。boot 模式把每只鸭子放入 Debian systemd-nspawn 容器，以真实 systemd unit、服务用户、运行目录和权限运行；它适合检查安装和启动顺序，需要 sudo、systemd-nspawn 和构建 rootfs 的工具。
+
+两种模式使用相同的 robotd 运动逻辑，但系统隔离程度不同。仿真中的 Rust 控制服务是真实运行时；传感器、串口和执行器是模拟的。
+
+## body server 同时提供相机和 ToF
+
+body_server.py 管关节状态、MuJoCo 步进、场景人物的 mocap 更新和虚拟身体协议；sim/camera.py 渲染鸭子头部视角并送出 UYVY 帧；sim/tof.py 模拟稀疏深度读取。身体协议默认在 7801 一类端口，图像帧通道从 7901 一类端口开始。它们不是 WebRTC 信令端口。
+
+## up、boot、fake 与硬件
+
+robotd --fake 用于没有物理身体的测试，关节读数可能只是被回送；它不计算跌倒和接触。robotd --sim 与 MuJoCo 身体联动，能测试步态、身体状态和应用服务，但不会模拟实际 Dynamixel UART、无线噪声、相机 ISP、真实 NPU 或所有摩擦现象。
+
+仿真最适合回答“Rust 服务和控制 API 有没有按预期协作”“这一策略会不会在该模型里走起来”。它无法回答“板上的驱动有没有读对编码器”“相机画面真实曝光怎样”“无线连接在房间另一端是否稳定”。
+
+## 真实时间预算
+
+控制循环目标是 50 Hz，模拟身体要跟上真实时间。渲染相机可能消耗比物理步进更高的 CPU；多鸭子和多相机可能让 realtime factor 降低，引发控制健康失败。scripts/duck-sim realtime 查看仿真是否接近 1.0×。性能下降时减少相机和鸭子数量，或使用 headless viewer，再比较物理步进时间。

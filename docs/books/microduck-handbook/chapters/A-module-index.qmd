@@ -1,0 +1,56 @@
+# 附录 A：完整模块索引
+
+本表覆盖 microduck Cargo workspace 的全部 23 个成员。目录名通常就是 crate 名；二进制服务与同名库有时位于一个 crate 中。
+
+## 常驻服务与客户端
+
+| crate | 角色 | 主要入口 |
+|---|---|---|
+| btd | BLE GATT 入口、请求路由与授权 | btd/src/ |
+| configd | 网络、身份、配对和系统配置服务 | configd/src/ |
+| mediad | 相机、麦克风、WebRTC 和本地控制台 | mediad/src/ |
+| padd | Linux 游戏手柄采集和控制意图 | padd/src/ |
+| robotd | 50 Hz 控制循环、策略与安全层 | robotd/src/main.rs |
+| updater | 更新引擎与 updaterd 服务 | updater/src/ |
+| tof | 深度传感器库与 tofd | tof/src/ |
+| robotctl | 机器人本机 CLI 和 monitor | robotctl/src/ |
+| duckctl | 电脑端 BLE CLI | duckctl/src/ |
+
+## 共用库和协议
+
+| crate | 角色 | 主要入口 |
+|---|---|---|
+| duck-control | 机器人控制、模型、I/O 与策略机制 | duck-control/src/ |
+| duck-ipc-proto | 服务 API、JSON-RPC 类型和 socket 路径 | duck-ipc-proto/src/lib.rs |
+| duck-ble | BLE 广播、协议分帧与辅助代码 | duck-ble/src/ |
+| duck-detect | 运行时视觉检测后端 | duck-detect/src/ |
+| duck-ether | 仿真中模拟的广播链路 | duck-ether/src/ |
+| kinematics | MJCF 和正向运动学 | kinematics/src/ |
+| odometry | 脚底接触与 IMU 局部里程计 | odometry/src/ |
+| pad-imu | 游戏手柄 IMU 姿态与动作融合 | pad-imu/src/ |
+| pet-detect | 板载麦克风声音事件检测 | pet-detect/src/ |
+| robotd-params | robotd 参数结构、默认值和校验 | robotd-params/src/ |
+| sounds | 声音合成、音色和合奏 | sounds/src/ |
+| uyvy | UYVY 帧像素格式处理 | uyvy/src/ |
+
+## 工程和验证工具
+
+| crate | 角色 |
+|---|---|
+| test-support | 更新、签名与发行测试所用辅助设施 |
+| xtask | 开发机发行打包、签名流程接口和晋升辅助 |
+
+额外目录不属于 Cargo crate，但也是产品交付的一部分：deploy/ 是板端默认配置；hooks/ 定义更新钩子；scripts/ 负责安装、交叉构建、仿真和 CI；docs/ 区分使用说明、机制设计和项目记录；policies/ 可保存本地策略资产。
+
+## 强化学习仓库
+
+| 路径 | 角色 |
+|---|---|
+| src/mjlab_microduck/robot/ | MJCF 模型、关节常量与场景资产 |
+| src/mjlab_microduck/actuator/ | BAM 执行器和摩擦/电压随机化 |
+| src/mjlab_microduck/tasks/ | 任务注册、MDP 和环境配置 |
+| src/mjlab_microduck/sim/ | MuJoCo body server、相机、ToF 仿真 |
+| src/mjlab_microduck/export.py | 由 checkpoint 导出运行时策略 |
+| src/mjlab_microduck/publish/ | manifest 验证与 Hub 发布 |
+| scripts/ | 演示、比较、绘图、模型转换与测试台工具 |
+| tests/ | 任务配置、物理模型与发布合同验证 |

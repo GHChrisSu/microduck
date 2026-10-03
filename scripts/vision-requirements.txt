@@ -1,0 +1,4 @@
+# Install into microduck_rl's already-provisioned simulator environment; the torch and numpy
+# versions stay governed by microduck_rl/pyproject.toml and uv.lock.
+ultralytics==8.4.171
+opencv-python==5.0.0.93

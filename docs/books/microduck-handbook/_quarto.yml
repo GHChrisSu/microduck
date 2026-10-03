@@ -1,0 +1,76 @@
+project:
+  type: book
+  output-dir: _book
+
+lang: zh-CN
+
+book:
+  title: "从仿真鸭到会跟随的机器人"
+  subtitle: "MicroDuck 工程全景与人物跟随实践"
+  author: "MicroDuck 工程学习手册"
+  date: "2026-10-03"
+  description: >-
+    从 Rust 机器人运行时、传感器与安全，到强化学习、MuJoCo 仿真、YOLO 视觉和人物跟随，
+    一步步读懂 MicroDuck 工程，并探索陪伴、教育、互动展演等应用方向。
+  output-file: microduck-learning
+  cover-image: images/cover.png
+  cover-image-alt: "深色封面上的象牙色机器人鸭，象征从仿真、策略训练到视觉跟随的工程闭环。"
+  chapters:
+    - index.qmd
+    - chapters/01-learning-map.qmd
+    - chapters/02-repository-map.qmd
+    - chapters/03-robotd-control-loop.qmd
+    - chapters/04-ipc-api.qmd
+    - chapters/05-safety-and-tools.qmd
+    - chapters/06-sensors-and-geometry.qmd
+    - chapters/07-camera-and-webrtc.qmd
+    - chapters/08-ble-and-gamepad.qmd
+    - chapters/09-sound-and-behavior.qmd
+    - chapters/10-updates-and-recovery.qmd
+    - chapters/11-build-and-release.qmd
+    - chapters/12-rl-repository.qmd
+    - chapters/13-model-actuator-and-backlash.qmd
+    - chapters/14-mdp-and-policy-contract.qmd
+    - chapters/15-training-tasks.qmd
+    - chapters/16-export-and-deploy.qmd
+    - chapters/17-simulation.qmd
+    - chapters/18-vision-detection.qmd
+    - chapters/19-person-following.qmd
+    - chapters/20-debugging-lab.qmd
+    - chapters/21-extending-the-project.qmd
+    - chapters/22-application-scenarios.qmd
+  appendices:
+    - chapters/A-module-index.qmd
+    - chapters/B-command-reference.qmd
+    - chapters/C-glossary.qmd
+    - production-comparison.qmd
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    language: _language-zh-CN.yml
+    toc: true
+    toc-depth: 2
+    number-sections: false
+    code-overflow: scroll
+    code-copy: true
+    smooth-scroll: true
+    search: true
+  epub:
+    css: styles.css
+    language: _language-zh-CN.yml
+    toc: true
+    toc-depth: 2
+    toc-title: "目录"
+    number-sections: false
+    code-overflow: scroll
+    epub-chapter-level: 1
+    cover-image: images/cover.png
+    metadata:
+      rights: "MicroDuck 工程学习资料"
+      subject: "机器人；强化学习；仿真；计算机视觉"
+
+number-depth: 2
+crossref:
+  chapters: true

@@ -1,0 +1,1127 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "从仿真鸭到会跟随的机器人",
+    "section": "",
+    "text": "写在前面\n如果你第一次打开 MicroDuck 工程，面对 Rust 服务、MuJoCo 模型、Python 强化学习和相机跟随脚本，很容易觉得它们像四个互不相干的项目。这本书想把这些线索接起来：一条线解释机器人怎样安全地站立和接收命令；一条线解释步态策略怎样在仿真中训练并回到机器人；最后用“看见一个人，再走过去”的例子，把相机、检测器、控制命令和步态连成闭环。\n本书按你真正会遇到的问题组织，而不是照着目录逐文件翻译。每章先回答“这个模块解决什么问题”，再说明它从哪里收数据、把结果交给谁、失败时怎样表现，以及你可以从哪些源文件继续读。涉及实现细节时，路径以本工作区的 microduck 和 microduck_rl 两个仓库为准。",
+    "crumbs": [
+      "写在前面"
+    ]
+  },
+  {
+    "objectID": "index.html#读完之后你应该能做什么",
+    "href": "index.html#读完之后你应该能做什么",
+    "title": "从仿真鸭到会跟随的机器人",
+    "section": "读完之后，你应该能做什么",
+    "text": "读完之后，你应该能做什么\n\n画出一条命令从键盘、BLE 或 WebRTC 进入 robotd，再变成舵机目标的路径。\n解释 robotd、mediad、configd、btd、updaterd 为什么是不同进程，以及它们怎样通过本地 IPC 协作。\n看懂 61 维策略输入、14 维动作以及 Rust 运行时与 Python 训练环境之间的接口。\n分辨“检测到人”和“知道人的距离”这两件事，并说明现在的跟随器如何转向、前进、停下和搜索。\n评估陪伴、教育、展演和远程在场等应用想法，判断每个场景还缺哪些工程能力。\n按照现有工程的边界，选择适合的文件开始改功能，而不是把相机、策略和舵机代码塞进同一个脚本。\n\n\n\n\n\n\n\n说明\n\n\n\n代码会继续变化。书中具体路径和命令以 2026-10-03 这次工作区梳理为基准；读源码时以当前分支为准。书末提供完整模块索引，方便你在代码变化后重新定位。",
+    "crumbs": [
+      "写在前面"
+    ]
+  },
+  {
+    "objectID": "index.html#建议的学习顺序",
+    "href": "index.html#建议的学习顺序",
+    "title": "从仿真鸭到会跟随的机器人",
+    "section": "建议的学习顺序",
+    "text": "建议的学习顺序\n第一次阅读时，按“工程地图 → 运行时 → 训练 → 仿真 → 视觉跟随”顺序读。已经熟悉 Rust 或强化学习的读者可以直接跳到对应部分，再通过模块索引补足另一侧。实践时先在仿真器里验证行为，确认控制命令、停止条件和目标丢失逻辑都符合预期，再考虑任何真实硬件实验。\n本书有意把步态训练与人物跟随分开讲。当前人物跟随不是一个从图像端到端学出来的策略：YOLO 提供目标框，普通控制逻辑计算转向和前进速度，已经训练好的行走策略负责迈步。分清这几层，是继续做实验的第一步。\n最后一章把已有模块放回产品问题中思考：小型机器人为什么适合做实体角色、课堂实验或群体表演，又为什么暂时不适合承担搬运和安全监护。畅想部分会清楚区分现状与未来工作。",
+    "crumbs": [
+      "写在前面"
+    ]
+  },
+  {
+    "objectID": "chapters/01-learning-map.html",
+    "href": "chapters/01-learning-map.html",
+    "title": "第一章：先把整个系统想成一条数据流",
+    "section": "",
+    "text": "四条主线\nMicroDuck 不是“一个模型控制一只鸭子”。它由两套仓库、若干运行服务、硬件与仿真环境组成。理解它最省力的方法，是沿着数据走一圈：传感器测到身体状态；控制循环把状态整理成策略输入；策略给出关节动作；安全层检查目标；舵机执行；外部程序通过同一套命令接口改变速度或动作。\n机器人运行时在 microduck/。它是 Rust Cargo workspace，包含 robotd 控制进程、相机与 WebRTC 服务、配置与蓝牙服务、更新服务、IPC 合同、运动学、里程计和开发工具。它关心“此刻怎样安全地驱动机器人”。\n强化学习工程在 microduck_rl/。它用 Python、MuJoCo、mjlab 与 PPO 训练策略，包含机器人 MJCF、任务奖励、执行器模型、域随机化和 ONNX 导出。它关心“如何在大量并行的虚拟鸭子上学到可靠动作”。\n仿真器把两者连接起来。MuJoCo 进程负责物理身体；Rust robotd 通过模拟 I/O 接口接收姿态和 IMU 数据、返回关节目标。于是调试 IPC、策略切换或用户界面时，可以使用真实运行时，而不用把所有服务重写成 Python 模拟程序。\n视觉跟随在这条闭环上再接入一层。模拟相机输出画面，YOLO 给出目标类别和矩形框，duck_vision_follow.py 将矩形框误差转成 robot.move 速度命令，robotd 再交给行走策略。人物场景则由 MuJoCo 中的一个人形模型提供可重复的测试目标。",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>第一章：先把整个系统想成一条数据流</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-learning-map.html#看见目标不等于跟过去",
+    "href": "chapters/01-learning-map.html#看见目标不等于跟过去",
+    "title": "第一章：先把整个系统想成一条数据流",
+    "section": "“看见目标”不等于“跟过去”",
+    "text": "“看见目标”不等于“跟过去”\n把需求拆成五个可以分别检查的问题：\n\n相机有没有输出正确方向、正确比例的图像？\n检测器能不能在这张图中稳定找到目标？\n目标框的位置与大小能否形成有意义的控制误差？\n控制器有没有持续发送合适的速度和停止命令？\n步态策略和模拟身体能不能按命令运动？\n\n当网页看得到人而鸭子不动，问题通常在第三到第五层；当鸭子转向错误，先检查图像旋转和左右误差符号；当目标消失后鸭子不寻找，检查丢失计时器和扫描状态，而不是先换更大的模型。\n\n\n\n\n\n\n提示\n\n\n\n第一轮学习不要急着改奖励函数或重新训练。先运行现成策略和跟随器，把摄像头、检测结果、速度命令、策略状态分别看清楚。能观察到每一层，才知道下一步该改哪里。",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>第一章：先把整个系统想成一条数据流</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/01-learning-map.html#两个仓库的责任边界",
+    "href": "chapters/01-learning-map.html#两个仓库的责任边界",
+    "title": "第一章：先把整个系统想成一条数据流",
+    "section": "两个仓库的责任边界",
+    "text": "两个仓库的责任边界\n训练仓库产生一个有固定输入输出合同的策略模型。运行时仓库加载该模型、提供真实传感器观测，并限制它能作用到的电机命令。相机跟随器产生的是运动意图；它不会直接指定每个舵机的角度。这个边界带来一个重要的工程优势：检测器出错时，停止意图可以阻断移动；步态策略升级时，视觉层不需要重新实现关节控制。\n接下来先看文件和进程如何分层，再从 50 Hz 控制循环追踪一条命令的完整旅程。",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>第一章：先把整个系统想成一条数据流</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-repository-map.html",
+    "href": "chapters/02-repository-map.html",
+    "title": "第二章：Rust 运行时的工程地图",
+    "section": "",
+    "text": "守护进程：持续运行并拥有资源\nmicroduck/Cargo.toml 把项目组织成一个 Cargo workspace。workspace 让多个 crate 共用依赖版本、版本号和构建命令，但每个 crate 仍有清楚的责任。理解边界时，先把它们分成守护进程、可复用库、工具和部署材料。\n把这些程序拆开，不是为了制造“微服务”标签，而是为了隔离硬件所有权、故障域和系统权限。相机重启时，不应夺走控制循环正在用的舵机串口；更新器替换运行时程序时，也不能依赖正在被替换的 robotd 完成自己。",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>第二章：Rust 运行时的工程地图</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-repository-map.html#守护进程持续运行并拥有资源",
+    "href": "chapters/02-repository-map.html#守护进程持续运行并拥有资源",
+    "title": "第二章：Rust 运行时的工程地图",
+    "section": "",
+    "text": "robotd/ 拥有 50 Hz 运动循环、舵机总线访问、安全检查、策略推理、姿态与声音行为。它是控制权的中心。\nmediad/ 拥有相机、麦克风、视频编码、WebRTC 会话和本机控制台。视频处理重、依赖平台媒体栈，因此独立于运动循环。\nconfigd/ 管理网络配置、机器人身份、配对 PIN、重启和手柄配对。网络凭据实际由 NetworkManager 持有。\nbtd/ 是 BLE GATT 入口，把经过授权的蓝牙请求转成服务调用。\npadd/ 读取 Linux 游戏手柄并提交控制意图。它作为普通客户端运行，不直接打开舵机总线。\nupdaterd/ 接收更新请求并驱动更新引擎。即使 robotd 出错，它也应该能负责恢复应用。\ntof/ 中的 tofd 管理头部 8×8 深度传感器并发布帧；深度读取与运动控制不是一个权限边界。",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>第二章：Rust 运行时的工程地图</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-repository-map.html#库实现机制不负责启动程序",
+    "href": "chapters/02-repository-map.html#库实现机制不负责启动程序",
+    "title": "第二章：Rust 运行时的工程地图",
+    "section": "库：实现机制，不负责启动程序",
+    "text": "库：实现机制，不负责启动程序\n\n\n\n\n\n\n\n\ncrate\n它负责什么\n可从哪里继续读\n\n\n\n\nduck-ipc-proto\n服务间 JSON-RPC 方法、消息与路径合同\nduck-ipc-proto/src/lib.rs\n\n\nduck-control\n机器人模型、总线、IMU、观测、策略、安全和仿真 I/O\nduck-control/src/\n\n\nkinematics\nMJCF 几何、正向运动学及头部、相机、手部坐标变换\nkinematics/src/\n\n\nodometry\n结合脚底接触与 IMU 的局部位移估计\nodometry/src/\n\n\nsounds\n声音合成、鸭子声音风格和合奏乐谱\nsounds/src/\n\n\npet-detect\n用麦克风信号识别抚摸头部一类声音事件\npet-detect/src/\n\n\nduck-detect\n运行时的鸭子视觉检测模型后端\nduck-detect/src/\n\n\nrobotd-params\nrobotd.toml 参数的结构、默认值、校验与编辑\nrobotd-params/src/\n\n\nduck-ble\nBLE 广播、GATT 数据分帧和协议辅助\nduck-ble/src/\n\n\nduck-ether\n仿真中替代群体 BLE 广播的可控虚拟无线链路\nduck-ether/src/\n\n\npad-imu\n手柄 IMU 方向与游戏手柄动作融合\npad-imu/src/\n\n\nuyvy\nUYVY 相机像素格式处理\nuyvy/src/\n\n\n\n工具也有明确边界：robotctl/ 是板端命令行；duckctl/ 是电脑端 BLE 客户端；xtask/ 生成、签名、晋升发行包；test-support/ 为更新和签名测试提供夹具。这些工具不应该被打进机器人常驻服务。",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>第二章：Rust 运行时的工程地图</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/02-repository-map.html#部署目录也是系统的一部分",
+    "href": "chapters/02-repository-map.html#部署目录也是系统的一部分",
+    "title": "第二章：Rust 运行时的工程地图",
+    "section": "部署目录也是系统的一部分",
+    "text": "部署目录也是系统的一部分\ndeploy/ 保存服务默认配置、更新信任锚与日志设置；hooks/ 保存安装前后脚本；scripts/ 负责板卡配置、开发推送、测试和交叉编译；docs/design/ 解释机制与边界；docs/robot/ 说明如何使用机器人。\n判断一段代码应该放哪里，可以问三件事：谁拥有这个资源？谁需要复用这个算法？进程退出时它必须由谁重启？如果答案分别是“唯一的服务”“多个客户端”“系统服务管理器”，通常就能看出应该是库、客户端还是守护进程。",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>第二章：Rust 运行时的工程地图</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-robotd-control-loop.html",
+    "href": "chapters/03-robotd-control-loop.html",
+    "title": "第三章：50 Hz 控制循环怎样让鸭子站稳",
+    "section": "",
+    "text": "一个 tick 的顺序\nrobotd 是运行时里最重要的程序，因为它是唯一持续拥有运动硬件控制权的服务。一个 50 Hz 循环意味着每隔 20 毫秒左右，程序会读取身体、更新内部状态、运行策略并提交关节目标。它不是“每来一个网页请求就直接控制舵机”；用户请求只更新意图，周期循环才是执行动作的地方。\n把一次循环画成数据管道，会比读完整个 main.rs 容易：\n实际源码会把配置、状态发布、策略加载和非运动行为穿插在这条主线上。定位实现可从 robotd/src/main.rs、duck-control/src/ 与 docs/design/robotd-design.md 开始；遇到实时延迟时，先看循环中哪些操作同步执行，不要假设所有功能都在一个线程里。",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>第三章：50 Hz 控制循环怎样让鸭子站稳</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-robotd-control-loop.html#一个-tick-的顺序",
+    "href": "chapters/03-robotd-control-loop.html#一个-tick-的顺序",
+    "title": "第三章：50 Hz 控制循环怎样让鸭子站稳",
+    "section": "",
+    "text": "伺服总线 / MuJoCo RemoteIo\n          │ 关节位置、速度、IMU\n          ▼\n      DuckIo 读取\n          │\n          ▼\n  模型与状态估计 ──脚底接触/里程计/姿态\n          │\n          ▼\n  组装策略观测（61 个浮点数）\n          │\n          ▼\n     ONNX 策略推理\n          │ 14 个动作值\n          ▼\n   动作缩放、模式与意图\n          │\n          ▼\n  限幅、跌倒与安全检查\n          │\n          ▼\n伺服目标 / MuJoCo body server",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>第三章：50 Hz 控制循环怎样让鸭子站稳</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-robotd-control-loop.html#为什么策略不是直接碰串口",
+    "href": "chapters/03-robotd-control-loop.html#为什么策略不是直接碰串口",
+    "title": "第三章：50 Hz 控制循环怎样让鸭子站稳",
+    "section": "为什么策略不是直接碰串口",
+    "text": "为什么策略不是直接碰串口\n策略只对当前观测提出动作。控制层将动作转换为舵机目标，再统一经过约束与安全机制。这样同一套步态模型可以在不同模式下重用，安全逻辑也不需要相信每一个策略或上层应用都正确。\n硬件总线由控制 I/O 层集中拥有。否则每个行为各自读写 UART，读到的状态可能来自不同时间，两个控制器还可能同时争抢同一个关节。串行总线也不是可以无限并行访问的资源；集中式读写使更新顺序可预测，并便于做超时和健康度判断。",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>第三章：50 Hz 控制循环怎样让鸭子站稳</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-robotd-control-loop.html#观测与动作的维度",
+    "href": "chapters/03-robotd-control-loop.html#观测与动作的维度",
+    "title": "第三章：50 Hz 控制循环怎样让鸭子站稳",
+    "section": "观测与动作的维度",
+    "text": "观测与动作的维度\n运行时和训练端共享一份重要约定。策略输入为 61 维，动作输出为 14 维。输入可分为：躯干坐标系陀螺仪 3 维、重力方向 3 维、14 个关节相对 home 的位置、14 个关节速度、上一轮的 14 个动作，以及 13 维命令向量。命令部分包含身体平移与偏航速度、头部姿态和躯干姿态。\n3 gyro + 3 gravity + 14 joint position + 14 joint velocity\n+ 14 previous action + 13 command = 61 actor inputs\n\n14 actuated joints = 14 policy outputs\n机器人身上有 15 个舵机编号，但强化学习关节动作只控制其中 14 个；嘴部舵机不进入这份步态网络的动作向量。这个区别很重要：舵机总数、策略关节数和观察向量长度不是一个数字。",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>第三章：50 Hz 控制循环怎样让鸭子站稳</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/03-robotd-control-loop.html#控制健康与真实时间",
+    "href": "chapters/03-robotd-control-loop.html#控制健康与真实时间",
+    "title": "第三章：50 Hz 控制循环怎样让鸭子站稳",
+    "section": "控制健康与真实时间",
+    "text": "控制健康与真实时间\n仿真时策略和控制循环仍按墙钟时间工作。MuJoCo 若跑不到接近 50 Hz，控制器看到的身体变化和它以为的变化就不匹配。对平衡控制来说，仿真慢下来可能表现为掉帧和不稳定，不能简单当作“动画播放比较慢”。robotctl monitor 与 scripts/duck-sim realtime 用来观察循环频率、超时和身体健康状态。",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>第三章：50 Hz 控制循环怎样让鸭子站稳</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-ipc-api.html",
+    "href": "chapters/04-ipc-api.html",
+    "title": "第四章：IPC 是服务之间的公共语言",
+    "section": "",
+    "text": "一条本机请求长什么样\nMicroDuck 把本机服务放在独立进程里，因此需要一种稳定的本地通信方式。duck-ipc-proto 定义 JSON-RPC 2.0 消息，一个 Unix socket 上每行一个 JSON 对象。协议 crate 刻意保持轻量，只依赖序列化和版本信息，这样 btd 或 robotd 不会因为共享协议而拖入更新器的 HTTP、压缩和密码学依赖。\nJSON-RPC 请求包含协议标识、方法名、参数和请求 ID；服务返回同一 ID 的结果或错误。每行一条消息使 socket 流能够被简单地逐条解析，也让调试时可以直接记录和检查边界。\n这类请求表达的是“以一定速度移动”的意图，不是“第 3 个舵机转到 0.6 弧度”。后者会绕过策略和运动安全，难以与行走中的状态协调。",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>第四章：IPC 是服务之间的公共语言</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-ipc-api.html#一条本机请求长什么样",
+    "href": "chapters/04-ipc-api.html#一条本机请求长什么样",
+    "title": "第四章：IPC 是服务之间的公共语言",
+    "section": "",
+    "text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"robot.move\",\n \"params\":{\"vx\":0.12,\"vy\":0.0,\"vyaw\":0.4}}",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>第四章：IPC 是服务之间的公共语言</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-ipc-api.html#方法按功能域命名",
+    "href": "chapters/04-ipc-api.html#方法按功能域命名",
+    "title": "第四章：IPC 是服务之间的公共语言",
+    "section": "方法按功能域命名",
+    "text": "方法按功能域命名\n常见命名空间包括 robot.、policy.、detector.、tof.、media.、net.、system.、pad. 和 chorale.*。前缀帮助读者看出状态与行为归哪个服务所有。相同的协议消息可以来自本地 CLI、BLE 桥接或 WebRTC 控制通道，但入口都必须被限制为该客户端有权调用的子集。\nrobot.move、robot.stop、robot.look 和 robot.state 是移动与状态控制的典型例子。policy.check 和 policy.install 属于策略组件获取；robot.loadPolicy 则告诉运动服务哪个策略槽位应启用。区分“下载一个文件”和“让运行中的控制器使用该文件”，可以避免把存储操作与实时切换混成一个动作。",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>第四章：IPC 是服务之间的公共语言</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-ipc-api.html#版本和兼容性",
+    "href": "chapters/04-ipc-api.html#版本和兼容性",
+    "title": "第四章：IPC 是服务之间的公共语言",
+    "section": "版本和兼容性",
+    "text": "版本和兼容性\n共享协议带有 API 版本，方法演进要考虑不同服务的重启顺序。新增字段应优先保持可选或带默认值的兼容行为；如果能力确实不可用，应该明确报“方法不存在”或“参数不支持”，而不是让客户端猜测某个服务版本。\nUnix socket 路径、运行目录和服务身份也属于合同的一部分。duck-ipc-proto/src/lib.rs 中可以找到各 socket 的默认路径与方法常量。阅读某个 API 时，同时搜索定义、服务端分派和调用方，不要只看 CLI 的命令行名字。",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>第四章：IPC 是服务之间的公共语言</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/04-ipc-api.html#安全边界在入口处",
+    "href": "chapters/04-ipc-api.html#安全边界在入口处",
+    "title": "第四章：IPC 是服务之间的公共语言",
+    "section": "安全边界在入口处",
+    "text": "安全边界在入口处\nbtd 和远程控制不应该暴露所有内部方法。它们要验证路由、参数和调用者权限，再转发到本地服务。服务之间使用 Unix socket 的权限、Linux peer credentials 和 systemd 用户隔离提供额外保护。设计新功能时，先确认它应从本机 CLI、BLE、WebRTC 的哪一个入口开放，再给相应入口增加受限的路由。",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>第四章：IPC 是服务之间的公共语言</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-safety-and-tools.html",
+    "href": "chapters/05-safety-and-tools.html",
+    "title": "第五章：安全、控制意图与日常工具",
+    "section": "",
+    "text": "意图有期限\n小型双足机器人并不因为体积小就能忽略安全。跌倒可能损坏相机、舵机齿轮和线缆；更常见的控制问题是网络请求已停止，但机器人仍认为旧指令有效。运行时因此把“用户希望怎样移动”与“驱动器目前允许怎样移动”分成两层。\n速度控制通过短期有效的运动意图维持。客户端必须持续刷新；客户端退出或网络断开后，意图过期，机器人归零停止。当前接口的意图 deadman 是约 500 毫秒。scripts/duck_vision_follow.py 以 5 Hz 更新命令，意味着每秒会刷新五次；若推理进程挂起，过期机制仍会接管。\n这种设计要求控制器既要显式发送移动命令，也要在识别失败、异常退出和清理时发送零速度。不要让一个“开始走”的事件变成无限有效的开关。",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>第五章：安全、控制意图与日常工具</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-safety-and-tools.html#意图动作与安全层的顺序",
+    "href": "chapters/05-safety-and-tools.html#意图动作与安全层的顺序",
+    "title": "第五章：安全、控制意图与日常工具",
+    "section": "意图、动作与安全层的顺序",
+    "text": "意图、动作与安全层的顺序\n外部客户端给出期望速度或动作；robotd 选择当前步态或动作策略；策略根据身体反馈算出关节目标；最后 safety 检查状态、关节目标、跌倒和执行器健康。越靠近硬件的层越有权否决上层命令。\nrobotctl monitor 是理解这层结构最有用的工具之一。它把请求命令与实际应用结果放在一起，还显示循环频率、健康状态、电池和温度、关节状态，以及 ToF、相机和手柄相关数据。遇到“网页按钮已按下但鸭子没走”，比较 requested 与 applied 状态，比不断调整按钮灵敏度更直接。",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>第五章：安全、控制意图与日常工具</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/05-safety-and-tools.html#cli-工具分工",
+    "href": "chapters/05-safety-and-tools.html#cli-工具分工",
+    "title": "第五章：安全、控制意图与日常工具",
+    "section": "CLI 工具分工",
+    "text": "CLI 工具分工\n\nrobotctl 在机器人本机调用服务，覆盖状态、配置、运动、策略与更新，是开发和诊断入口。\nduckctl 在电脑上连接 BLE，负责发现设备、读取状态与发送远程请求。\nscripts/duck-sim 管理本地 MuJoCo 身体、Rust 服务、日志、监视和键盘控制。\nscripts/dev-push.sh 把本地构建通过受控更新流程推到开发板；它复用更新机制，不是随意覆盖正在运行的二进制。\n\n把问题描述成可观测的阶段会更有效：命令有没有到达？意图有没有更新？策略是否启用？安全层有没有拒绝？body server 收到目标了吗？每个问题都对应一个不同的日志或状态。",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>第五章：安全、控制意图与日常工具</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/06-sensors-and-geometry.html",
+    "href": "chapters/06-sensors-and-geometry.html",
+    "title": "第六章：传感器、坐标系与“鸭子走了多远”",
+    "section": "",
+    "text": "IMU 和关节状态\n移动机器人需要把不同传感器的读数放到同一个身体坐标系里理解。头部相机、ToF 深度传感器和 IMU 不一定固定在躯干中心；头部转动时，相机与深度射线相对于身体的位置也随之改变。因此“相机看到图像中心”本身不是一个世界坐标中的方向。\n控制循环读取关节位置、速度和惯性测量单元数据。陀螺仪提供角速度，重力方向帮助判断身体相对竖直的姿态。步态策略并不是根据“前方有障碍”直接驱动舵机，而是先以身体状态和期望速度为条件，再推断下一组关节动作。\n关节位置与速度也需要统一顺序。顺序被策略的 61 维输入合同固定；将 XML 里的关节顺序、运行时 joint map 和训练配置混为一谈，是导出维度正确但走路姿态错误的典型原因。",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>第六章：传感器、坐标系与“鸭子走了多远”</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/06-sensors-and-geometry.html#tof稀疏的近距离深度",
+    "href": "chapters/06-sensors-and-geometry.html#tof稀疏的近距离深度",
+    "title": "第六章：传感器、坐标系与“鸭子走了多远”",
+    "section": "ToF：稀疏的近距离深度",
+    "text": "ToF：稀疏的近距离深度\ntof/ 中的 tofd 服务提供头部 8×8 深度帧。它可以回答“某个粗略方向有多远”，但它不是一张高分辨率 RGB 图，也不会自动给障碍分类。ToF 服务发布数据，不向机器人发运动命令。上层行为可以组合 ToF 距离、图像目标和身体姿态来作决策。",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>第六章：传感器、坐标系与“鸭子走了多远”</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/06-sensors-and-geometry.html#kinematics把传感器坐标放回机器人",
+    "href": "chapters/06-sensors-and-geometry.html#kinematics把传感器坐标放回机器人",
+    "title": "第六章：传感器、坐标系与“鸭子走了多远”",
+    "section": "kinematics：把传感器坐标放回机器人",
+    "text": "kinematics：把传感器坐标放回机器人\nkinematics/ 根据 MJCF 模型和正向运动学，计算头部、手部、相机和 ToF 光束的位姿。比如头部转向之后，算法可把每条 ToF 测距方向从传感器局部坐标变换到躯干坐标。MJCF 是模型几何来源；传感器坐标不应该靠手工猜一个固定偏移量。",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>第六章：传感器、坐标系与“鸭子走了多远”</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/06-sensors-and-geometry.html#odometry局部估计不是-gps",
+    "href": "chapters/06-sensors-and-geometry.html#odometry局部估计不是-gps",
+    "title": "第六章：传感器、坐标系与“鸭子走了多远”",
+    "section": "odometry：局部估计，不是 GPS",
+    "text": "odometry：局部估计，不是 GPS\nodometry/ 使用 IMU 与脚底接触锚点估计机器人相对走了多少。脚踩住地面时，脚的位置可当作短时间锚点；IMU 姿态帮助判断身体转动和运动。误差会随时间累积，因此 odometry 适合短程闭环和步态分析，不等同于无漂移的全局定位。",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>第六章：传感器、坐标系与“鸭子走了多远”</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/06-sensors-and-geometry.html#三种容易混淆的检测器",
+    "href": "chapters/06-sensors-and-geometry.html#三种容易混淆的检测器",
+    "title": "第六章：传感器、坐标系与“鸭子走了多远”",
+    "section": "三种容易混淆的检测器",
+    "text": "三种容易混淆的检测器\nduck-detect 是机器人运行时的视觉“鸭子”检测组件，面向自己的部署模型后端。当前人物跟随脚本里的通用 COCO YOLO 则是另外一条实验路径。pet-detect 甚至不是视觉检测，它分析麦克风信号，识别类似抚摸头部的声音事件。\n名字相似并不代表职责相同。想识别 COCO 中的 person 或 bottle，要读跟随脚本与 YOLO 模型配置；想让板端持续运行目标检测，则还要考虑 duck-detect 的模型格式、NPU 后端、帧输入链路和计算预算。",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>第六章：传感器、坐标系与“鸭子走了多远”</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/07-camera-and-webrtc.html",
+    "href": "chapters/07-camera-and-webrtc.html",
+    "title": "第七章：相机、视频和 WebRTC",
+    "section": "",
+    "text": "从传感器到浏览器\nmediad 把高带宽媒体链路从 robotd 分离出来。运动循环最重要的责任是按时读传感器和发目标；相机捕获、色彩转换、硬件编码、网络抖动处理和浏览器连接都有不同的延迟特征。让它们由独立服务管理，能够避免某次视频编码卡顿直接占住舵机总线。\n真实机器人上，相机由 Linux 媒体管线采集，mediad 负责取帧、转换格式并创建 WebRTC 视频轨道。平台能力会影响编码和摄像头路径，因此在 Mac 上能跑仿真视频，不等于板端的 ISP、VPU 和传感器驱动已经被测试。\nWebRTC 是默认的实时媒体方式。浏览器会话既承载加密视频，也可带控制数据通道，拥有返回路径，适合手机在局域网外观察和控制鸭子。仓库还有面向“长期推送原始帧、没有控制返回”的 media.stream 备用机制；开发新客户端时应先按 docs/README.md 的机制说明选择，而不要只因看到旧注释就把它当首选。",
+    "crumbs": [
+      "<span class='chapter-number'>7</span>  <span class='chapter-title'>第七章：相机、视频和 WebRTC</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/07-camera-and-webrtc.html#本机控制台与端口",
+    "href": "chapters/07-camera-and-webrtc.html#本机控制台与端口",
+    "title": "第七章：相机、视频和 WebRTC",
+    "section": "本机控制台与端口",
+    "text": "本机控制台与端口\n模拟器可以用本地 HTTP 控制台观察画面，默认地址是 http://127.0.0.1:8080；信令服务通常位于 8443。这里的网页只是同一套媒体和控制服务的一个客户端，不是机器人仿真的全部内容。网页画面只显示相机视锥内的投影；要扩大目标活动范围，还要改场景尺寸和人物轨迹，不能只拉伸网页视频。",
+    "crumbs": [
+      "<span class='chapter-number'>7</span>  <span class='chapter-title'>第七章：相机、视频和 WebRTC</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/07-camera-and-webrtc.html#图像方向和视场角",
+    "href": "chapters/07-camera-and-webrtc.html#图像方向和视场角",
+    "title": "第七章：相机、视频和 WebRTC",
+    "section": "图像方向和视场角",
+    "text": "图像方向和视场角\n模拟相机在当前场景中的基线是 640×360 横向画面，跟随脚本默认不旋转。真实相机的安装可能需要 90 度挂载方向修正，所以不要把真实相机的旋转参数照搬到模拟器。分辨率比例决定显示的宽高，但不是镜头视场角；水平视场角还由模型相机的 focal length 与 sensor width 决定。\n检查图像时要分别问：像素是否横向？相机本地坐标的前向在哪里？渲染器把哪个维度当作图像宽度？检测器得到的框坐标是否与显示图一致？这几个问题不能用一个 CSS 旋转一起“修复”。",
+    "crumbs": [
+      "<span class='chapter-number'>7</span>  <span class='chapter-title'>第七章：相机、视频和 WebRTC</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/08-ble-and-gamepad.html",
+    "href": "chapters/08-ble-and-gamepad.html",
+    "title": "第八章：BLE、手机入口和手柄输入",
+    "section": "",
+    "text": "蓝牙分成协议库和入口进程\n控制机器人不只有网页。手机或遥控器可以通过 BLE 进入，游戏手柄由 padd 读取，配置操作由 configd 完成。它们最后可以共享 robotd 的运动意图 API，但连接、授权和输入解释依然属于不同模块。\nduck-ble/ 是通用 BLE 协议辅助库，负责广播、GATT 分帧和底层编码；btd/ 是运行时 BLE front door，创建 GATT 服务并把授权后的请求转发到内部 RPC。duckctl/ 是电脑侧 BLE 客户端，方便开发者发现设备和调用可远程开放的命令。\n这种分层让协议编码能被测试和复用，也让系统权限留在独立服务。BLE 客户端不是 Unix socket 的透明代理：它只能开放产品需要的 API，配对和路由权限在 btd 与 configd 里处理。",
+    "crumbs": [
+      "<span class='chapter-number'>8</span>  <span class='chapter-title'>第八章：BLE、手机入口和手柄输入</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/08-ble-and-gamepad.html#手柄路径",
+    "href": "chapters/08-ble-and-gamepad.html#手柄路径",
+    "title": "第八章：BLE、手机入口和手柄输入",
+    "section": "手柄路径",
+    "text": "手柄路径\npadd/ 从 Linux 输入设备读取摇杆、按键和扳机状态，并作为 socket 客户端持续更新 pad 意图。pad-imu/ 单独解释手柄上的惯性测量单元，将设备姿态或挥动动作转成稳定输入。手柄配对由 configd 协调，但在运行时通常由 padd 完成输入采集。\n把手柄进程做成普通客户端，可以在它退出或设备断连时依赖 deadman 停止移动；它也不需要获得舵机总线或 root 权限。调试手柄时，先区分“蓝牙已配对”“Linux 输入设备可读”“padd 已发布意图”和“robotd 正在采用手柄意图”四个阶段。",
+    "crumbs": [
+      "<span class='chapter-number'>8</span>  <span class='chapter-title'>第八章：BLE、手机入口和手柄输入</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/08-ble-and-gamepad.html#虚拟无线链路",
+    "href": "chapters/08-ble-and-gamepad.html#虚拟无线链路",
+    "title": "第八章：BLE、手机入口和手柄输入",
+    "section": "虚拟无线链路",
+    "text": "虚拟无线链路\n多人仿真中的 duck-ether 提供可控的虚拟无线广播。它允许测试合奏行为中的延迟和丢包，而不是假设虚拟网络永远可靠。良好的仿真链路应该能暴露现实中会发生的错误，否则多个鸭子在理想广播下同步，不代表实际 BLE 也能同步。",
+    "crumbs": [
+      "<span class='chapter-number'>8</span>  <span class='chapter-title'>第八章：BLE、手机入口和手柄输入</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/09-sound-and-behavior.html",
+    "href": "chapters/09-sound-and-behavior.html",
+    "title": "第九章：声音、个性和更高层行为",
+    "section": "",
+    "text": "sounds 与 robotd 的关系\nrobotd 不只是每 20 毫秒跑一次步态。它还协调嘴部动作、声音、乐器、群体合奏和面向用户的行为。这里的关键设计仍然是责任分层：声音合成库提供音色和乐谱；机器人服务判断何时发声；传感器检测器把环境事件转成上层可消费的线索。\nsounds/ 库负责合成波形、每只机器人不同的声音参数，以及 chorale 合奏所需的音符与时序结构。robotd 控制声音事件的生命周期，并根据当前机器人行为与群体状态调度。把合成算法放在库中，能避免声音生成依赖 systemd 或 IPC；把播放决策留在服务中，则可以让动作与声音使用统一的机器人状态。",
+    "crumbs": [
+      "<span class='chapter-number'>9</span>  <span class='chapter-title'>第九章：声音、个性和更高层行为</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/09-sound-and-behavior.html#theremin-和-chorale",
+    "href": "chapters/09-sound-and-behavior.html#theremin-和-chorale",
+    "title": "第九章：声音、个性和更高层行为",
+    "section": "theremin 和 chorale",
+    "text": "theremin 和 chorale\ntheremin 类行为把身体或环境状态映射成音高等连续音乐参数；chorale 使用分布式消息协调多只鸭子合奏。单只鸭子的声音可以本地合成，群体节拍还要考虑广播延迟和丢包，所以运行时存在 duck-ether 来模拟无线链路缺陷。",
+    "crumbs": [
+      "<span class='chapter-number'>9</span>  <span class='chapter-title'>第九章：声音、个性和更高层行为</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/09-sound-and-behavior.html#pet-detect-是听觉事件",
+    "href": "chapters/09-sound-and-behavior.html#pet-detect-是听觉事件",
+    "title": "第九章：声音、个性和更高层行为",
+    "section": "pet-detect 是听觉事件",
+    "text": "pet-detect 是听觉事件\npet-detect/ 不是视觉“宠物检测”，而是小型 CNN 音频分类器，用板载麦克风识别头部被抚摸一类声音模式。检测器输出一个事件线索，由 robotd 或更高层行为决定接下来做什么。事件分类和运动策略不同：前者判断“可能发生了什么”，后者决定“关节应该如何运动”。",
+    "crumbs": [
+      "<span class='chapter-number'>9</span>  <span class='chapter-title'>第九章：声音、个性和更高层行为</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/09-sound-and-behavior.html#行为模式扩展原则",
+    "href": "chapters/09-sound-and-behavior.html#行为模式扩展原则",
+    "title": "第九章：声音、个性和更高层行为",
+    "section": "行为模式扩展原则",
+    "text": "行为模式扩展原则\n新行为应先定义输入信号、状态机和退出条件，再确定需要调用已有的动作槽位、声音服务还是连续速度意图。任何能让机器人持续运动的行为都应有超时、取消和竞争处理；它必须能够把控制权交还给 stop 或 safety。一个行为名字进入 robot.do，不代表实现就已经安全；服务还要明确它是否允许在当前模式、当前姿态和当前策略下运行。",
+    "crumbs": [
+      "<span class='chapter-number'>9</span>  <span class='chapter-title'>第九章：声音、个性和更高层行为</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/10-updates-and-recovery.html",
+    "href": "chapters/10-updates-and-recovery.html",
+    "title": "第十章：更新、策略包与故障恢复",
+    "section": "",
+    "text": "应用更新的安全顺序\n机器人软件不是在桌面上重新编译就完成交付。更新包要通过校验、安装钩子、原子切换、服务重启和健康检查，任何阶段失败都要能回退。updaterd 与 robotd 分开运行，正是为了让控制服务坏掉时，仍有另一条路径恢复系统。\n更新引擎在独立版本目录解包文件，校验签名和哈希，运行 preinstall，再原子切换当前版本链接。之后根据 restart-order.md 重启相关服务，并让 health gate 检查 robot.health。若安装、启动或健康检查失败，就切回之前的版本。切换前后的文件不是逐个覆盖，所以意外断电不会留下半新半旧的运行目录。\n这不是整套 Linux 操作系统固件升级。它更新机器人应用组件；板卡镜像、引导程序和底层系统升级是另一类操作，不能把应用更新的回滚保证套用到它们身上。",
+    "crumbs": [
+      "<span class='chapter-number'>10</span>  <span class='chapter-title'>第十章：更新、策略包与故障恢复</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/10-updates-and-recovery.html#策略组件和服务版本分开",
+    "href": "chapters/10-updates-and-recovery.html#策略组件和服务版本分开",
+    "title": "第十章：更新、策略包与故障恢复",
+    "section": "策略组件和服务版本分开",
+    "text": "策略组件和服务版本分开\n步态模型通过 ONNX 部署，可以独立于 Rust daemon 更新。updaterd 的 policy 路径查询发行版本、获取策略并通知 robotd 重新加载。机器人配置中的策略槽位是持久用户偏好；模型加载失败时，不能把正在工作的控制器换成一个坏网络。\ndetector 组件使用相似的版本获取入口，但它有独立目录和调用边界。策略的输入输出是固定数值向量；检测器处理相机或其他感知输入。把它们分开可以控制模型依赖、权限和升级节奏。",
+    "crumbs": [
+      "<span class='chapter-number'>10</span>  <span class='chapter-title'>第十章：更新、策略包与故障恢复</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/10-updates-and-recovery.html#签名来源和复位",
+    "href": "chapters/10-updates-and-recovery.html#签名来源和复位",
+    "title": "第十章：更新、策略包与故障恢复",
+    "section": "签名、来源和复位",
+    "text": "签名、来源和复位\n发行 daemon 包由 CI 签名，机器人持有信任锚并验证包。官方策略的来源与社区策略的来源不同，恢复到默认策略时必须回到可信的官方槽位。策略属于受限插件：它不能直接获得总线写权限，关节目标仍经由 robotd 的安全层；因此它的风险边界和一个新的 daemon 可执行文件并不一样。",
+    "crumbs": [
+      "<span class='chapter-number'>10</span>  <span class='chapter-title'>第十章：更新、策略包与故障恢复</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/10-updates-and-recovery.html#recovery-与开机顺序",
+    "href": "chapters/10-updates-and-recovery.html#recovery-与开机顺序",
+    "title": "第十章：更新、策略包与故障恢复",
+    "section": "recovery 与开机顺序",
+    "text": "recovery 与开机顺序\nboot recovery 处理一种很具体的故障：新版本成为 current 后，关键服务无法正常启动。系统根据启动记录与健康标记退回 golden 或前一版可启动版本。更新设计、服务重启顺序和启动恢复由 docs/design/updater-design.md、restart-order.md 与 boot-recovery-net.md 分别说明；排查时先读拥有该机制的页面。",
+    "crumbs": [
+      "<span class='chapter-number'>10</span>  <span class='chapter-title'>第十章：更新、策略包与故障恢复</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/11-build-and-release.html",
+    "href": "chapters/11-build-and-release.html",
+    "title": "第十一章：从本地代码到板端版本",
+    "section": "",
+    "text": "本机开发与仿真\nmicroduck 仓库的日常开发主要使用 Cargo workspace。贡献指南要求 Rust stable 1.99 以上。macOS 可以构建大多数组件；Linux 上还需要 GStreamer 与 libudev 开发包。某些 BlueZ、NetworkManager 和硬件访问代码只在 Linux 目标编译，因此 Mac 上构建通过，并不能证明板端路径正确。\n开发功能时先选择最小 crate 构建，再在需要时构建整个 workspace。模拟器运行真实 robotd 和同一套 IPC API，所以它适合验证服务间交互、策略切换、控制台和大多数更新逻辑。驱动器、实际蓝牙射频、摄像头 ISP 和板端 NPU 不在笔记本模拟范围内。",
+    "crumbs": [
+      "<span class='chapter-number'>11</span>  <span class='chapter-title'>第十一章：从本地代码到板端版本</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/11-build-and-release.html#dev-push-和安装边界",
+    "href": "chapters/11-build-and-release.html#dev-push-和安装边界",
+    "title": "第十一章：从本地代码到板端版本",
+    "section": "dev-push 和安装边界",
+    "text": "dev-push 和安装边界\nscripts/dev-push.sh 在开发机上构建目标程序，再通过受控更新路径装到板子。它可用 cargo zigbuild 交叉编译，也可使用容器构建。测试机器人上的开发构建仍走版本和健康检查，所以发生失败时可以回退；直接 scp 覆盖运行二进制会绕开这条保障。",
+    "crumbs": [
+      "<span class='chapter-number'>11</span>  <span class='chapter-title'>第十一章：从本地代码到板端版本</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/11-build-and-release.html#xtask-和-ci-发布",
+    "href": "chapters/11-build-and-release.html#xtask-和-ci-发布",
+    "title": "第十一章：从本地代码到板端版本",
+    "section": "xtask 和 CI 发布",
+    "text": "xtask 和 CI 发布\nxtask package、sign、promote 负责形成和晋升发行物。生产签名在 CI 完成，不在开发者机器保存发布密钥。staging 预发布先让机器人安装和观察，稳定发布再晋升相同产物。Cargo 版本、Git 标签与包元数据必须匹配，避免机器人报告的版本与实际字节不一致。",
+    "crumbs": [
+      "<span class='chapter-number'>11</span>  <span class='chapter-title'>第十一章：从本地代码到板端版本</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/11-build-and-release.html#测试应该验证什么",
+    "href": "chapters/11-build-and-release.html#测试应该验证什么",
+    "title": "第十一章：从本地代码到板端版本",
+    "section": "测试应该验证什么",
+    "text": "测试应该验证什么\n单元测试适合纯算法、输入输出和配置校验；更新系统测试则要把签名错误、postinstall 故障、健康检查失败和切换时断电作为完整流程注入。Linux-only 集成还需要在目标系统环境验证。先看 microduck/CONTRIBUTING.md 和 scripts/board-test.sh，按机制挑检查，而不是把一次 Mac 全量构建当作所有平台验证。",
+    "crumbs": [
+      "<span class='chapter-number'>11</span>  <span class='chapter-title'>第十一章：从本地代码到板端版本</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/12-rl-repository.html",
+    "href": "chapters/12-rl-repository.html",
+    "title": "第十二章：强化学习仓库是怎样组织的",
+    "section": "",
+    "text": "主要目录\nmicroduck_rl/ 是策略的训练、验证、导出和发布工程。它面向 Python 3.12，使用 uv 管理环境，依赖 mjlab、MuJoCo Warp、BAM 和 PyTorch。训练路径默认需要 CUDA GPU；Mac 上可运行部分推理和仿真工具，但 MPS 可用不等于本地已经具备仓库声明的 CUDA 批量训练环境。\n这个结构让“物理模型”“要学的任务”“如何训练”“如何落地部署”互相可查，但可以单独修改。改相机背景不会改变步态奖励；改奖励不会自动改变导出格式。",
+    "crumbs": [
+      "<span class='chapter-number'>12</span>  <span class='chapter-title'>第十二章：强化学习仓库是怎样组织的</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/12-rl-repository.html#主要目录",
+    "href": "chapters/12-rl-repository.html#主要目录",
+    "title": "第十二章：强化学习仓库是怎样组织的",
+    "section": "",
+    "text": "src/mjlab_microduck/robot/ 放 MJCF 机器人模型、任务常量和关节映射。\nsrc/mjlab_microduck/actuator/ 放 BAM 执行器包装和参数随机化。\nsrc/mjlab_microduck/tasks/ 放环境配置、MDP 奖励、重置、事件和任务注册。\nsrc/mjlab_microduck/sim/ 放机器人 body server、相机和 ToF 的仿真服务端。\nsrc/mjlab_microduck/export.py 与脚本目录负责检查点载入、策略演示、ONNX 导出。\nsrc/mjlab_microduck/publish/ 负责发布清单、模型合同检查和仓库上传。",
+    "crumbs": [
+      "<span class='chapter-number'>12</span>  <span class='chapter-title'>第十二章：强化学习仓库是怎样组织的</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/12-rl-repository.html#训练入口运行器和记录",
+    "href": "chapters/12-rl-repository.html#训练入口运行器和记录",
+    "title": "第十二章：强化学习仓库是怎样组织的",
+    "section": "训练入口、运行器和记录",
+    "text": "训练入口、运行器和记录\n命令行 train 将 task id 解析成 mjlab 环境配置与 PPO runner 配置，然后创建数千个并行环境，收集状态转移并更新网络。wandb 或本地日志记录奖励、存活率和动作表现，检查点可用于恢复训练与稍后导出。Play 使用已训练策略加载少量环境，让人直接观察行为。\n环境数量越大，GPU 计算与显存需求越高。README 中 4096 个并行环境和 1–2 小时“可用步态”是针对合适 CUDA 机器的经验，不是对所有机器的保证。没有兼容 GPU 时，仓库提供 Hugging Face Jobs 路径，把训练调度到远程 GPU，而不是要求本地 Mac 冒充训练节点。",
+    "crumbs": [
+      "<span class='chapter-number'>12</span>  <span class='chapter-title'>第十二章：强化学习仓库是怎样组织的</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/12-rl-repository.html#学习过程的正确问题",
+    "href": "chapters/12-rl-repository.html#学习过程的正确问题",
+    "title": "第十二章：强化学习仓库是怎样组织的",
+    "section": "学习过程的正确问题",
+    "text": "学习过程的正确问题\n训练结束不代表策略具备 sim2real 能力。需要检查训练回报是否代表任务成功、身体能否承受随机参数、失败姿态是否覆盖充分、导出后的 ONNX 是否通过运行时维度与数值检查。对双足机器人来说，“能在干净的理想模型中站起来”只证明任务简单实例已学会，不证明电池电压下降或齿轮间隙存在时仍可靠。",
+    "crumbs": [
+      "<span class='chapter-number'>12</span>  <span class='chapter-title'>第十二章：强化学习仓库是怎样组织的</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/13-model-actuator-and-backlash.html",
+    "href": "chapters/13-model-actuator-and-backlash.html",
+    "title": "第十三章：MJCF、舵机模型和机械间隙",
+    "section": "",
+    "text": "多个 MJCF 不是重复模型\n强化学习只会学到仿真所描述的世界。因此机器人模型不是一张用于展示的三维外观，而是训练数据生成器：质量、惯量、碰撞几何、舵机力矩和接触摩擦都会影响策略最终学到的动作。\n主要机器人 XML 位于 src/mjlab_microduck/robot/microduck/。robot_walk.xml 为速度行走裁剪掉部分躯干接触，使常规走路的跌倒处理计算开销较低。robot_groundcontact.xml 有允许身体接触地面的碰撞几何，用于起身、坐站、地面拾取、踢球和翻滚。rollers 变体在脚底加被动滚轮；robot_allcollisions.xml 描述更完整碰撞，目前没有任务依赖它。\n场景文件会把某一机器人模型放到地板、斜坡、球和起始姿态中。修改模型后应该明确列出哪些任务会受影响，避免只在一个 scene 里看到“外观对”就以为所有训练环境物理都正确。",
+    "crumbs": [
+      "<span class='chapter-number'>13</span>  <span class='chapter-title'>第十三章：MJCF、舵机模型和机械间隙</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/13-model-actuator-and-backlash.html#bam-actuator-model",
+    "href": "chapters/13-model-actuator-and-backlash.html#bam-actuator-model",
+    "title": "第十三章：MJCF、舵机模型和机械间隙",
+    "section": "BAM actuator model",
+    "text": "BAM actuator model\nXL330 是微型舵机，真实输出受电压、负载、反电动势和摩擦影响。工程用 BAM M6 模型模拟电压控制、负载相关的库仑与 Stribeck 摩擦，并随机化输入电压、负载压降、命令延迟和摩擦量。理想 PD 只依据误差给力矩，难以代表电池、齿轮和电机共同产生的响应。\n域随机化不是往仿真里乱加噪音。它对真实硬件中不确定的参数取合理范围，让策略学会在这一分布里维持稳定。随机范围过窄会留下 sim2real 缺口；范围漫无边际则会训练出保守或无法收敛的策略。",
+    "crumbs": [
+      "<span class='chapter-number'>13</span>  <span class='chapter-title'>第十三章：MJCF、舵机模型和机械间隙</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/13-model-actuator-and-backlash.html#backlash-齿隙",
+    "href": "chapters/13-model-actuator-and-backlash.html#backlash-齿隙",
+    "title": "第十三章：MJCF、舵机模型和机械间隙",
+    "section": "backlash 齿隙",
+    "text": "backlash 齿隙\n14 个主动舵机关节可以带一个串联的被动间隙铰链，左右各约 1 度，总游隙约 2 度。实际编码器位于间隙后的输出侧，所以观测关节角必须把伺服角和 backlash 角合在一起；训练和仿真的动作/观测维度保持不变。\n这类机械误差会使“电机转了多少”和“腿实际转了多少”不完全相同。把 backlash 加到训练里，可以让策略提前适应死区。实现入口在 tasks/backlash.py 与 actuator/friction_dr_bam.py。",
+    "crumbs": [
+      "<span class='chapter-number'>13</span>  <span class='chapter-title'>第十三章：MJCF、舵机模型和机械间隙</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/14-mdp-and-policy-contract.html",
+    "href": "chapters/14-mdp-and-policy-contract.html",
+    "title": "第十四章：MDP 怎样变成机器人能执行的 ONNX 策略",
+    "section": "",
+    "text": "观测：让策略知道身体和命令\n每个强化学习任务都可以拆成 MDP 五件事：状态观测、动作、奖励、状态转移和结束条件。microduck_rl 中的环境配置把这些概念落实到模拟机器人上；mdp.py 和任务配置共同决定机器人能看见什么、动作之后奖励什么、何时重置。\nActor 接收 61 维输入合同，其中包括陀螺仪、重力方向、关节位置与速度、上一动作和外部命令。不同任务可以调整命令解释或加入训练期的 critic 信息，但最终可部署 actor 必须与运行时输入合同相符。训练配置中的术语顺序与缩放值都属于接口，不只是调参细节。",
+    "crumbs": [
+      "<span class='chapter-number'>14</span>  <span class='chapter-title'>第十四章：MDP 怎样变成机器人能执行的 ONNX 策略</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/14-mdp-and-policy-contract.html#动作14-个连续关节命令",
+    "href": "chapters/14-mdp-and-policy-contract.html#动作14-个连续关节命令",
+    "title": "第十四章：MDP 怎样变成机器人能执行的 ONNX 策略",
+    "section": "动作：14 个连续关节命令",
+    "text": "动作：14 个连续关节命令\nActor 输出 14 个主动关节动作，再经过每个任务配置的 scale、home offset 或控制器转换成舵机目标。动作归一化范围、训练 joint order 与运行时关节映射必须匹配。把动作错位一个槽位，ONNX 仍然可以成功执行，但机器人的左右腿可能按错误的关节目标运动。",
+    "crumbs": [
+      "<span class='chapter-number'>14</span>  <span class='chapter-title'>第十四章：MDP 怎样变成机器人能执行的 ONNX 策略</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/14-mdp-and-policy-contract.html#奖励不要奖励容易作弊的结果",
+    "href": "chapters/14-mdp-and-policy-contract.html#奖励不要奖励容易作弊的结果",
+    "title": "第十四章：MDP 怎样变成机器人能执行的 ONNX 策略",
+    "section": "奖励：不要奖励容易作弊的结果",
+    "text": "奖励：不要奖励容易作弊的结果\n速度任务会奖励对目标线速度和角速度的跟踪，同时惩罚过大冲击、关节抖动、能耗或身体倾斜。站立任务要奖励稳定姿态和保持位置；翻滚任务要鼓励完成过渡并以安全姿态结束。奖励的每一项都是设计假设，应该检查它是否真的代表人的目标，而不是只让仪表盘数字变大。\n域随机化事件改变电压、摩擦、质量、IMU 方向、编码器偏差、时延或外部推力；课程学习逐步提高目标难度。reset 与 termination 定义起始姿态和失败判定。NaN guard 等保护防止数值错误污染大量并行环境。",
+    "crumbs": [
+      "<span class='chapter-number'>14</span>  <span class='chapter-title'>第十四章：MDP 怎样变成机器人能执行的 ONNX 策略</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/14-mdp-and-policy-contract.html#actor-critic-与部署边界",
+    "href": "chapters/14-mdp-and-policy-contract.html#actor-critic-与部署边界",
+    "title": "第十四章：MDP 怎样变成机器人能执行的 ONNX 策略",
+    "section": "actor / critic 与部署边界",
+    "text": "actor / critic 与部署边界\n训练时 critic 可以有比 actor 更多的仿真信息，帮助 PPO 估算价值；运行时只需要 actor。导出 ONNX 时，observation normalizer 必须烘焙进模型图，否则仿真中正常化后的输入与运行时原始传感器输入不一致。不要手工把 checkpoint 用另一个 exporter 转换；项目指定 scripts/export.py 为唯一支持的导出路径。\n最终形状固定为输入 [1,61]、输出 [1,14]。这不证明走路正确，但可以先挡住最常见的接口错误。publish 还会检查模型可运行、manifest 清单和任务元数据。",
+    "crumbs": [
+      "<span class='chapter-number'>14</span>  <span class='chapter-title'>第十四章：MDP 怎样变成机器人能执行的 ONNX 策略</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/15-training-tasks.html",
+    "href": "chapters/15-training-tasks.html",
+    "title": "第十五章：训练任务不是一张扁平清单",
+    "section": "",
+    "text": "双足任务族\n仓库提供的是一组由简单到复杂的技能，而不是一个包办一切的“超级模型”。先认识每类任务的目标、身体模型和失败代价，再选择最接近你要解决的问题。",
+    "crumbs": [
+      "<span class='chapter-number'>15</span>  <span class='chapter-title'>第十五章：训练任务不是一张扁平清单</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/15-training-tasks.html#双足任务族",
+    "href": "chapters/15-training-tasks.html#双足任务族",
+    "title": "第十五章：训练任务不是一张扁平清单",
+    "section": "",
+    "text": "任务族\n学到什么\n适合先验证什么\n\n\n\n\nVelocity Flat / Rough\n平地或粗糙地形速度跟随，支持头部姿态命令\n基础步态、转向、地形鲁棒性\n\n\nVelStand Flat / Rough\n行走并在摔倒后恢复\n跌倒检测与恢复切换\n\n\nStandUp Flat / Rough\n从仰卧、俯卧或坐姿起身并站稳\n起身动作与身体姿态控制\n\n\nSitStand Flat / Rough\n受控坐下和站起\n慢速姿态过渡\n\n\nGroundPick Flat / Rough\n蹲下，用嘴尖触地再站起\n头、躯干和腿的协同\n\n\nBallKick Flat\n盲于球位置的前踢动作\n预设动作、接触建模\n\n\nRoulade Flat\n向前翻滚后回到脚上\n大幅姿态变化与终止状态",
+    "crumbs": [
+      "<span class='chapter-number'>15</span>  <span class='chapter-title'>第十五章：训练任务不是一张扁平清单</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/15-training-tasks.html#滚轮任务族",
+    "href": "chapters/15-training-tasks.html#滚轮任务族",
+    "title": "第十五章：训练任务不是一张扁平清单",
+    "section": "滚轮任务族",
+    "text": "滚轮任务族\n\n\n\n任务\n行为目标\n\n\n\n\nVelocity Rollers\n被动脚轮上的速度跟踪\n\n\nVelocity Swizzle\n对称 swizzle 滑行\n\n\nRollerCrouch\n滑行中保持蹲姿\n\n\nRollerSlope\n在坡面上控制下滑\n\n\nRollerStandUp\n从地面恢复到滚轮站立\n\n\nSpin\n在滚轮上快速原地旋转\n\n\n\n平地与粗糙地形任务各有不同物理难度。多数任务还可以插入 Backlash 变体，训练模型面对 14 个关节的机械间隙。BallKick、Roulade 等任务的接触模型与行走任务不同，不能因为它们共用 61→14 合同，就认为一份策略可以自动完成所有技能。",
+    "crumbs": [
+      "<span class='chapter-number'>15</span>  <span class='chapter-title'>第十五章：训练任务不是一张扁平清单</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/15-training-tasks.html#任务选择的顺序",
+    "href": "chapters/15-training-tasks.html#任务选择的顺序",
+    "title": "第十五章：训练任务不是一张扁平清单",
+    "section": "任务选择的顺序",
+    "text": "任务选择的顺序\n第一次训练建议从 Velocity Flat 开始，先证明训练、检查点和 play 流程跑通；之后再尝试 Rough 或 VelStand，确认鲁棒性和恢复。若目标是跟随某个人，当前任务已经能根据期望线速度和角速度行走，因此通常应先提升视觉/距离估计和速度控制，而不是直接创建一个带相机的全新 PPO 任务。\n环境 ID 在 tasks/init.py 注册；任务列表会随代码演进。运行 list-envs 获取当前分支真实可用的名称，不要只复制很久以前的训练命令。",
+    "crumbs": [
+      "<span class='chapter-number'>15</span>  <span class='chapter-title'>第十五章：训练任务不是一张扁平清单</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/16-export-and-deploy.html",
+    "href": "chapters/16-export-and-deploy.html",
+    "title": "第十六章：训练、导出、发布和部署",
+    "section": "",
+    "text": "快速训练与恢复\n训练到部署至少经过四个阶段：训练环境运行；结果检查与选取 checkpoint；导出可执行 actor；发布并在机器人上安装。每一阶段都有单独失败模式，应该逐段验证，而不是把一次长训练当作“模型已做好”。\n仓库 README 提供 Velocity Flat 示例，用 uv run train 启动注册任务，并把并行场景数量设为 4096。该配置针对 CUDA 机器的 GPU 吞吐量。训练运行名和 checkpoint 路径决定如何恢复实验；resume 要确认 task、环境配置和模型架构与原运行一致。\n训练日志应同时查看奖励趋势、摔倒率、速度误差、动作幅度和现场视频。单个总 reward 可能掩盖一种速度下表现很好、另一种速度下总摔倒的策略。通过 play 运行 checkpoint，观察在随机命令与多个初始姿态下是否稳定。",
+    "crumbs": [
+      "<span class='chapter-number'>16</span>  <span class='chapter-title'>第十六章：训练、导出、发布和部署</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/16-export-and-deploy.html#onnx-导出",
+    "href": "chapters/16-export-and-deploy.html#onnx-导出",
+    "title": "第十六章：训练、导出、发布和部署",
+    "section": "ONNX 导出",
+    "text": "ONNX 导出\nscripts/export.py 从训练 runner 加载 checkpoint，并通过官方 runner exporter 导出 ONNX。它将观测 normalizer 一起写进图中。导出后要确认元数据任务、版本和张量形状，再用项目自己的推理程序做一次仿真回放。",
+    "crumbs": [
+      "<span class='chapter-number'>16</span>  <span class='chapter-title'>第十六章：训练、导出、发布和部署</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/16-export-and-deploy.html#manifest-与发布",
+    "href": "chapters/16-export-and-deploy.html#manifest-与发布",
+    "title": "第十六章：训练、导出、发布和部署",
+    "section": "manifest 与发布",
+    "text": "manifest 与发布\npublish 子命令把 ONNX 与 manifest.json 包成组件，检查 [1,61] 输入与 [1,14] 输出，执行推理 smoke check，然后上传仓库。manifest 描述 kind、动作类型、时长和模型来源；机器人用它判断组件槽位与用户可见信息。",
+    "crumbs": [
+      "<span class='chapter-number'>16</span>  <span class='chapter-title'>第十六章：训练、导出、发布和部署</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/16-export-and-deploy.html#安装到-robotd",
+    "href": "chapters/16-export-and-deploy.html#安装到-robotd",
+    "title": "第十六章：训练、导出、发布和部署",
+    "section": "安装到 robotd",
+    "text": "安装到 robotd\n板端的机器人运行时负责验证策略接口并载入网络。用 robotctl policy list、check、install、load 等命令管理模型和槽位；实际子命令以该 checkout 的 help 为准。策略更新与 daemon 更新独立，因此可以迭代步态而不必为每个模型改动重新发行 Rust 服务。\n发布到真实机器人之前，先用仿真动作检查方向、站立姿势、关节顺序和安全停止。如果模型载入成功但运动明显不对，立即停下并检查 observation normalization、joint order、home offset 和命令槽位，不要用大速度继续“让它适应”。",
+    "crumbs": [
+      "<span class='chapter-number'>16</span>  <span class='chapter-title'>第十六章：训练、导出、发布和部署</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/17-simulation.html",
+    "href": "chapters/17-simulation.html",
+    "title": "第十七章：MuJoCo 仿真怎样接入真实运行时",
+    "section": "",
+    "text": "scripts/duck-sim 管什么\n仿真分为两个进程。microduck_rl 中的 duck-body 运行 MuJoCo，计算虚拟身体动力学；microduck 中的 robotd 使用 RemoteIo 作为身体 I/O。每个控制 tick，MuJoCo 服务端发回关节位置、速度和 IMU，robotd 将控制目标沿 TCP 通道送回模拟身体。\nscripts/duck-sim 把 Python body server、Rust daemon、模拟 ToF、mediad 相机和各个本机 socket 连起来。普通 up 模式直接以当前用户启动进程，启动快，适合日常迭代。boot 模式把每只鸭子放入 Debian systemd-nspawn 容器，以真实 systemd unit、服务用户、运行目录和权限运行；它适合检查安装和启动顺序，需要 sudo、systemd-nspawn 和构建 rootfs 的工具。\n两种模式使用相同的 robotd 运动逻辑，但系统隔离程度不同。仿真中的 Rust 控制服务是真实运行时；传感器、串口和执行器是模拟的。",
+    "crumbs": [
+      "<span class='chapter-number'>17</span>  <span class='chapter-title'>第十七章：MuJoCo 仿真怎样接入真实运行时</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/17-simulation.html#body-server-同时提供相机和-tof",
+    "href": "chapters/17-simulation.html#body-server-同时提供相机和-tof",
+    "title": "第十七章：MuJoCo 仿真怎样接入真实运行时",
+    "section": "body server 同时提供相机和 ToF",
+    "text": "body server 同时提供相机和 ToF\nbody_server.py 管关节状态、MuJoCo 步进、场景人物的 mocap 更新和虚拟身体协议；sim/camera.py 渲染鸭子头部视角并送出 UYVY 帧；sim/tof.py 模拟稀疏深度读取。身体协议默认在 7801 一类端口，图像帧通道从 7901 一类端口开始。它们不是 WebRTC 信令端口。",
+    "crumbs": [
+      "<span class='chapter-number'>17</span>  <span class='chapter-title'>第十七章：MuJoCo 仿真怎样接入真实运行时</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/17-simulation.html#upbootfake-与硬件",
+    "href": "chapters/17-simulation.html#upbootfake-与硬件",
+    "title": "第十七章：MuJoCo 仿真怎样接入真实运行时",
+    "section": "up、boot、fake 与硬件",
+    "text": "up、boot、fake 与硬件\nrobotd –fake 用于没有物理身体的测试，关节读数可能只是被回送；它不计算跌倒和接触。robotd –sim 与 MuJoCo 身体联动，能测试步态、身体状态和应用服务，但不会模拟实际 Dynamixel UART、无线噪声、相机 ISP、真实 NPU 或所有摩擦现象。\n仿真最适合回答“Rust 服务和控制 API 有没有按预期协作”“这一策略会不会在该模型里走起来”。它无法回答“板上的驱动有没有读对编码器”“相机画面真实曝光怎样”“无线连接在房间另一端是否稳定”。",
+    "crumbs": [
+      "<span class='chapter-number'>17</span>  <span class='chapter-title'>第十七章：MuJoCo 仿真怎样接入真实运行时</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/17-simulation.html#真实时间预算",
+    "href": "chapters/17-simulation.html#真实时间预算",
+    "title": "第十七章：MuJoCo 仿真怎样接入真实运行时",
+    "section": "真实时间预算",
+    "text": "真实时间预算\n控制循环目标是 50 Hz，模拟身体要跟上真实时间。渲染相机可能消耗比物理步进更高的 CPU；多鸭子和多相机可能让 realtime factor 降低，引发控制健康失败。scripts/duck-sim realtime 查看仿真是否接近 1.0×。性能下降时减少相机和鸭子数量，或使用 headless viewer，再比较物理步进时间。",
+    "crumbs": [
+      "<span class='chapter-number'>17</span>  <span class='chapter-title'>第十七章：MuJoCo 仿真怎样接入真实运行时</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/18-vision-detection.html",
+    "href": "chapters/18-vision-detection.html",
+    "title": "第十八章：YOLO、物体类别与距离估计",
+    "section": "",
+    "text": "换一个识别对象\n相机跟随实验使用 Ultralytics YOLO26n 预训练权重识别 COCO 数据集类别。它可以在一个模型里识别 person、bottle、sports ball 等多种已知类别。scripts/duck_vision_follow.py 的 target 参数按模型类别名称过滤，并不是为每个物体单独训练一个分类器。\n检测脚本可以只显示检测结果而不控制鸭子。第一次运行时应使用 detect-only 模式，确认命令行显示的 class、置信度、目标框面积和画面位置符合预期。切换对象时，先查当前模型 names 是否包含该名称；没有这个类别，脚本会打印可用类别并退出。\n模型类别之外的物体需要创建训练数据、给目标框标注、用预训练权重微调并评估召回率和误报。目标是“白色保温杯”这类外观特定对象时，COCO 的 bottle 类可能只给出粗类别，不能可靠识别型号或身份。",
+    "crumbs": [
+      "<span class='chapter-number'>18</span>  <span class='chapter-title'>第十八章：YOLO、物体类别与距离估计</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/18-vision-detection.html#目标框给的是图像量",
+    "href": "chapters/18-vision-detection.html#目标框给的是图像量",
+    "title": "第十八章：YOLO、物体类别与距离估计",
+    "section": "目标框给的是图像量",
+    "text": "目标框给的是图像量\nYOLO 返回像素框。脚本计算框中心相对图像中心的归一化横向 bearing，以及框面积比例和框高度比例。这能回答“目标在视野左边还是右边”“它是否看起来很近”，但它本身没有返回精确米数。\n从框大小推算距离需要额外条件，例如已知人的身高、目标真实尺寸、相机内参和目标姿态；透视、遮挡和检测框变化都会影响结果。若要稳定保持人与鸭子之间的米制间隔，应组合深度传感器、双目/深度相机、地面几何或经标定的视觉距离估计，而不应把框面积称为真实距离。",
+    "crumbs": [
+      "<span class='chapter-number'>18</span>  <span class='chapter-title'>第十八章：YOLO、物体类别与距离估计</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/18-vision-detection.html#通用-yolo-和运行时-duck-detect",
+    "href": "chapters/18-vision-detection.html#通用-yolo-和运行时-duck-detect",
+    "title": "第十八章：YOLO、物体类别与距离估计",
+    "section": "通用 YOLO 和运行时 duck-detect",
+    "text": "通用 YOLO 和运行时 duck-detect\nduck_vision_follow.py 通过 Python、OpenCV、PyTorch 和 Ultralytics 在本机做实验，可在 macOS 上优先选择 MPS 后端，否则用 CPU。它和 Rust 工程的 duck-detect crate 不是同一模块。要把视觉功能部署到 Radxa 板端，需要考虑 NPU/RKNN 或 ONNX 推理支持、内存与功耗、mediad 帧接口、安装包和受限 IPC；把笔记本实验脚本拷到板上还不构成可维护的产品功能。",
+    "crumbs": [
+      "<span class='chapter-number'>18</span>  <span class='chapter-title'>第十八章：YOLO、物体类别与距离估计</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/18-vision-detection.html#画面方向是检测合同的一部分",
+    "href": "chapters/18-vision-detection.html#画面方向是检测合同的一部分",
+    "title": "第十八章：YOLO、物体类别与距离估计",
+    "section": "画面方向是检测合同的一部分",
+    "text": "画面方向是检测合同的一部分\n当前模拟帧是 640×360 UYVY 横向图像，脚本默认 rotate=0。图像先转换为 BGR，再送给 YOLO。若把图像旋转后只旋转网页而不旋转检测坐标，左/右偏差会不一致。需要验证同一个目标在浏览器叠框和终端 bearing 中方向一致。",
+    "crumbs": [
+      "<span class='chapter-number'>18</span>  <span class='chapter-title'>第十八章：YOLO、物体类别与距离估计</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/19-person-following.html",
+    "href": "chapters/19-person-following.html",
+    "title": "第十九章：从人的检测框到鸭子的跟随命令",
+    "section": "",
+    "text": "闭环时序\n人物跟随是一个由多个简单模块串起来的反馈控制器。它不是端到端视觉运动策略；YOLO 识别人并给出框，Python 代码计算转向和速度，robotd 选择已经训练过的步态策略，再由 MuJoCo 更新身体位置。把这些步骤分开后，才能知道“人物在跑、鸭子没追上”是哪一段需要改。\n这里有两个不同频率：检测器默认每秒约处理 5 次画面，步态循环目标约每秒 50 次。vision 进程用低频运动意图更新目标，步态策略在两次视觉结果之间用高频反馈保持平衡。它们不需要同频。",
+    "crumbs": [
+      "<span class='chapter-number'>19</span>  <span class='chapter-title'>第十九章：从人的检测框到鸭子的跟随命令</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/19-person-following.html#闭环时序",
+    "href": "chapters/19-person-following.html#闭环时序",
+    "title": "第十九章：从人的检测框到鸭子的跟随命令",
+    "section": "",
+    "text": "MuJoCo 人形和环境\n   ↓ 渲染头部视角\n640×360 UYVY → camera socket 7901\n   ↓ 解码、YOLO 推理（默认 5 Hz）\n目标框中心 / 框面积 / 框高度\n   ↓ 跟随状态机\nrobot.move(vx, vy, vyaw) → robotd socket\n   ↓ 50 Hz 身体反馈与策略推理\nMuJoCo 关节目标和新画面",
+    "crumbs": [
+      "<span class='chapter-number'>19</span>  <span class='chapter-title'>第十九章：从人的检测框到鸭子的跟随命令</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/19-person-following.html#找到目标后的转向和前进",
+    "href": "chapters/19-person-following.html#找到目标后的转向和前进",
+    "title": "第十九章：从人的检测框到鸭子的跟随命令",
+    "section": "找到目标后的转向和前进",
+    "text": "找到目标后的转向和前进\n将框中心归一化成 bearing，图像左侧为负、右侧为正。robot.move 定义正 yaw 为向左，因此当目标位于右侧时脚本给负 yaw。默认中心容忍带约为图像半宽的 30%，额外 10% 滞回避免人框轻微抖动时不停切换“居中/偏离”状态。\n如果目标离中心较远，当前脚本允许边向前走边修正方向，避免停住原地打转。默认 max-forward 为 0.40 m/s，max-yaw 上限为 0.95 rad/s，最小转向约 0.40 rad/s；scripts/duck-sim follow 教学入口会显式把前进速度限制在 0.30 m/s。",
+    "crumbs": [
+      "<span class='chapter-number'>19</span>  <span class='chapter-title'>第十九章：从人的检测框到鸭子的跟随命令</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/19-person-following.html#保持距离不是精确测距",
+    "href": "chapters/19-person-following.html#保持距离不是精确测距",
+    "title": "第十九章：从人的检测框到鸭子的跟随命令",
+    "section": "保持距离不是精确测距",
+    "text": "保持距离不是精确测距\n脚本通用默认值是目标框面积达到画面的 9%，或框高度达到图像高度的 58% 时进入距离保持状态；退出使用更低阈值形成滞回，避免人在跑动时腿和手臂变化造成频繁启停。人物跟随课堂入口 scripts/duck-sim follow 会覆盖成 4% 和 40%，同时把前进速度限制为 0.30 m/s。覆盖值让鸭子更早停下，画面里保留完整的人体；以脚本为准，不要只根据通用默认值判断课堂行为。\n这些数值是图像框阈值，不是“距离一米”。不同相机视场角、人物身高、姿态和检测器都会改变框大小。正式实验前要从小速度开始，人工检查停止位置是否安全。要给出米制跟随距离，下一步应融入 ToF 或相机标定后的距离估计。",
+    "crumbs": [
+      "<span class='chapter-number'>19</span>  <span class='chapter-title'>第十九章：从人的检测框到鸭子的跟随命令</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/19-person-following.html#丢失后搜索",
+    "href": "chapters/19-person-following.html#丢失后搜索",
+    "title": "第十九章：从人的检测框到鸭子的跟随命令",
+    "section": "丢失后搜索",
+    "text": "丢失后搜索\n目标消失时，控制器先立即停止前进。等待默认 0.6 秒后，开始左右交替扫描；每次转动约 2.5 秒，中间停 0.35 秒，再反向扫。第一次扫描方向依据目标最后所在画面一侧选择。重新检测到目标后清零丢失状态并恢复跟随；无论正常结束还是 Ctrl-C，finally 都发送零速度。\nrobotd 的意图 deadman 是最后的保护：进程停止刷新后，约 500 毫秒内旧命令过期。但 deadman 不代替跟随脚本主动停止；如果摄像头断流、用户取消任务或程序退出，应用应该立即撤销自己的意图。",
+    "crumbs": [
+      "<span class='chapter-number'>19</span>  <span class='chapter-title'>第十九章：从人的检测框到鸭子的跟随命令</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/19-person-following.html#人形场景如何变得可重复",
+    "href": "chapters/19-person-following.html#人形场景如何变得可重复",
+    "title": "第十九章：从人的检测框到鸭子的跟随命令",
+    "section": "人形场景如何变得可重复",
+    "text": "人形场景如何变得可重复\nmicroduck_rl/robot/microduck/scene_approach.xml 提供约 1.73 米高的人形目标，初始位置大约在鸭子前方 9.5 米。body_server.py 按有界多正弦路线更新人的 mocap 位置，摆动手臂和腿，并约每 5.2 秒加入一次跳跃。body server 的基础运动距离和周期可以配置；当前 scripts/duck-sim follow 将人物的前后活动范围设为 5.5 米、横向半幅设为 2.2 米、路线时间尺度设为 52 秒。这个路线覆盖面积约为原先的 3 倍，同时大部分时间留在相机前向视野附近。无 seed 时每次路线不同，传入 seed 才能复现。人体是真实尺度的几何场景目标，不是经过人体动力学训练的类人机器人。相机看到的是虚拟人，跟随算法看到的仍是普通图像。",
+    "crumbs": [
+      "<span class='chapter-number'>19</span>  <span class='chapter-title'>第十九章：从人的检测框到鸭子的跟随命令</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/20-debugging-lab.html",
+    "href": "chapters/20-debugging-lab.html",
+    "title": "第二十章：把“鸭子没动”拆成可复现的检查",
+    "section": "",
+    "text": "实验一：先证明身体能动\n做视觉跟随时，网页里有人形不表示机器人已经接收到跟随命令。沿着闭环逐层看，既省时间，也能把现象记录成其他人可以复现的故障报告。\n启动仿真并确认 robotd healthy、50 Hz loop 和 realtime factor。用手动 drive 给很小的正向速度，再检查 viewer 中身体是否平移。若不动，暂时跳过 YOLO：此时要查策略是否启用、动作是否允许、安全状态是否拒绝、body server 是否连上。",
+    "crumbs": [
+      "<span class='chapter-number'>20</span>  <span class='chapter-title'>第二十章：把“鸭子没动”拆成可复现的检查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/20-debugging-lab.html#实验二只检查画面和检测",
+    "href": "chapters/20-debugging-lab.html#实验二只检查画面和检测",
+    "title": "第二十章：把“鸭子没动”拆成可复现的检查",
+    "section": "实验二：只检查画面和检测",
+    "text": "实验二：只检查画面和检测\n以 DUCK_SIM_SCENE=approach、DUCK_SIM_CAMERAS=a 和 DUCK_SIM_MOVE_TARGET=follow_person 启动人物场景。打开控制台检查人物是否在正确距离、画面是否横向、前后与左右运动是否明显。先以不带 –drive 的检测命令运行，查看终端 class、bearing、box-area 和 box-height。\n如果摄像头没有帧，检查相机端口、模拟器日志和 mediad；如果画面有目标而 YOLO 没报框，检查类别名、模型是否成功下载、运行设备与 confidence；不要马上启动 drive 模式。",
+    "crumbs": [
+      "<span class='chapter-number'>20</span>  <span class='chapter-title'>第二十章：把“鸭子没动”拆成可复现的检查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/20-debugging-lab.html#实验三验证命令方向",
+    "href": "chapters/20-debugging-lab.html#实验三验证命令方向",
+    "title": "第二十章：把“鸭子没动”拆成可复现的检查",
+    "section": "实验三：验证命令方向",
+    "text": "实验三：验证命令方向\n让目标站在视野右边，确认 bearing 为正且 yaw 命令为负；站到左边时应相反。目标接近中央时，应收到正向速度。观察 robotd 的 applied command 和策略状态，确认命令没有被 deadman 或 safety 拒绝。\n若鸭子只在原地转，确认不是继续使用旧版本的“偏离中心就归零前进”逻辑。当前实现边前进边转向，除非目标框已达到停止距离阈值。",
+    "crumbs": [
+      "<span class='chapter-number'>20</span>  <span class='chapter-title'>第二十章：把“鸭子没动”拆成可复现的检查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/20-debugging-lab.html#实验四检验边界行为",
+    "href": "chapters/20-debugging-lab.html#实验四检验边界行为",
+    "title": "第二十章：把“鸭子没动”拆成可复现的检查",
+    "section": "实验四：检验边界行为",
+    "text": "实验四：检验边界行为\n依次测试目标变大、目标瞬间消失、目标缓慢移出画面、程序 Ctrl-C、摄像头断开。预期是：接近距离门限时停止前进；目标丢失后先停止，延迟后转向搜索；退出时发送零速度；进程突然消失后由 500 毫秒 deadman 最终停止。",
+    "crumbs": [
+      "<span class='chapter-number'>20</span>  <span class='chapter-title'>第二十章：把“鸭子没动”拆成可复现的检查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/20-debugging-lab.html#一次只改一个旋钮",
+    "href": "chapters/20-debugging-lab.html#一次只改一个旋钮",
+    "title": "第二十章：把“鸭子没动”拆成可复现的检查",
+    "section": "一次只改一个旋钮",
+    "text": "一次只改一个旋钮\n如果人太远才停止，调小 stop-area 或 stop-height；如果距人太近仍走，调大门限并检查框尺寸是否稳定；如果转向缓慢，逐步提高 min-yaw 或 max-yaw；如果视角抖动，先增加检测稳定性和滞回，不要同时把 yaw、检测频率、目标路线都改掉。每次记录参数、场景 seed、重现步骤和结果，再决定是否保留改动。",
+    "crumbs": [
+      "<span class='chapter-number'>20</span>  <span class='chapter-title'>第二十章：把“鸭子没动”拆成可复现的检查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/21-extending-the-project.html",
+    "href": "chapters/21-extending-the-project.html",
+    "title": "第二十一章：下一步怎样把跟随做得更可靠",
+    "section": "",
+    "text": "按风险从低到高扩展\n当前跟随器已经能识别目标、围绕图像中心调整方向、用框大小作粗略距离保持、目标丢失后搜索，并使用现成行走策略。但它仍有明显边界：检测与速度控制在本地脚本中运行；没有物理距离闭环；没有多帧身份跟踪；控制参数没有按房间或机器人标定；仿真与板端推理路径也不同。\n第一步提高测量质量：显示原始框、类别、置信度、bearing、帧时间和速度命令；使用多帧平滑与目标关联，避免两个人同时出现时突然追向另一个人。\n第二步增加距离来源：对齐头部 ToF 的 8×8 深度与当前相机视野，为目标框附近估计有效深度；过滤无效读数并考虑头部姿态。设计安全停止距离时应以米为单位，并设置传感器失效时的保守行为。\n第三步把实验程序产品化：定义 detector IPC 合同，把帧输入、模型生命周期、配置和状态交给明确组件；为板端 NPU 后端测量延迟、内存和掉帧；把速度控制放到受权限约束的服务路径中。\n第四步再考虑学习控制策略。可以先让 PPO 的目标命令由外部视觉控制器提供，利用现有 velocity policy 完成移动；若想让 actor 直接看图像，就需要图像编码器、目标身份/距离状态、并行视觉仿真、相机随机化和大量多样场景，训练问题会远大于增加一个奖励项。",
+    "crumbs": [
+      "<span class='chapter-number'>21</span>  <span class='chapter-title'>第二十一章：下一步怎样把跟随做得更可靠</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/21-extending-the-project.html#适合当作第一个贡献的工作",
+    "href": "chapters/21-extending-the-project.html#适合当作第一个贡献的工作",
+    "title": "第二十一章：下一步怎样把跟随做得更可靠",
+    "section": "适合当作第一个贡献的工作",
+    "text": "适合当作第一个贡献的工作\n\n增加一份跟随实验运行日志，记录每次检测到的目标框与实际发出的意图。\n加入目标连续性策略，让选择目标不只依赖“最大的框”。\n把 ToF 距离可视化叠加到横向画面，检查坐标投影误差。\n把固定阈值整理为带单位、范围验证和默认值的配置项。\n为脚本的零速度清理、丢失扫描切换和距离滞回加入边界验证。\n\n阅读或修改时，先查看对应机制文档和 crate 责任，再寻找现有入口。好的改动会沿着已有接口补一层能力，而不是绕开 robotd 的命令期限和安全约束。",
+    "crumbs": [
+      "<span class='chapter-number'>21</span>  <span class='chapter-title'>第二十一章：下一步怎样把跟随做得更可靠</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html",
+    "href": "chapters/22-application-scenarios.html",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "",
+    "text": "先看清这只鸭子的长处\n人物跟随让鸭子表现出一种很直观的能力：它能看见一个目标，并用身体走向目标。但“会跟着人走”只是交互方式之一。MicroDuck 更值得探索的方向，是让一个小型双足机器人用动作、声音和一点自主性成为房间里的角色、课堂里的实验对象，或研究者手边的机器人平台。\n本章会畅想应用，也会标明能力边界。下面的场景是根据当前工程模块提出的设计方向，不代表这些产品功能已经完成，也不构成项目承诺。每个想法都要经过仿真、硬件验证、安全测试和用户体验验证。\nMicroDuck 是一台体量很小的双足机器人：身高约 25 厘米，重量约 800 克，身体有 15 个舵机，其中行走策略输出 14 维动作。它能站立、迈步、转向、摆头、发声，也能接收相机、麦克风、ToF 深度和无线消息等信息。开发环境还提供 MuJoCo 仿真、强化学习训练和人物跟随实验。\n这些特征决定了它更像一个能移动和表达的“实体角色”，而不是缩小版的家用人形机器人。它没有手，无法可靠拿杯子、开门或整理物品；体型和电池也不适合承担重载、长时间巡逻或身体辅助。它的优势在于可见、可听、能动、能被编程，也能让开发者把软件决策与真实的身体运动联系起来。\n可以用三个问题筛选应用：机器人能不能通过动作或声音提供有意义的反馈？任务能不能在小范围内安全完成？失败之后，机器人能不能停下来并让人在场接管？三个问题都能回答“能”，这个场景就值得先做原型。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#场景一桌面陪伴与有性格的机器人",
+    "href": "chapters/22-application-scenarios.html#场景一桌面陪伴与有性格的机器人",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "场景一：桌面陪伴与有性格的机器人",
+    "text": "场景一：桌面陪伴与有性格的机器人\n陪伴不必从“鸭子能聊天”开始。一个更可实现的版本，是让它听到熟悉的声音后转头，看到人靠近后抬头问候，空闲时做轻微动作；用户离开时恢复安静。动作、音色、反应节奏和偶尔出现的小习惯共同构成性格。\n当前可以复用 robot.look、行走意图、声音合成、麦克风事件、ToF 手部距离跟踪和行为服务的接口。缺少的核心是统一的行为状态机：它需要维护“空闲、注意到声音、正在互动、疲劳或低电量”等状态，规定状态进入和退出条件，并在打断或故障时停止动作。docs/ideas/autonomous_behavior.md 收集了一些候选行为，例如问候、惊吓反应、打盹、被抚摸反应和情绪能量模型；它目前是构想清单，不能当作已经合并到 robotd 的功能说明。\n后续可以让用户给鸭子起名字、选择声音和互动频率，或在本机保存用户许可的有限偏好。不过，“记住某个人”会牵涉身份识别、数据保存与删除。早期原型可以只记住本次会话里的互动，不采集或上传人脸，不持续录音。陪伴价值来自可预测又略有惊喜的回应，不需要把摄像头和麦克风一直打开。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#场景二机器人与人工智能教育",
+    "href": "chapters/22-application-scenarios.html#场景二机器人与人工智能教育",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "场景二：机器人与人工智能教育",
+    "text": "场景二：机器人与人工智能教育\n教育是当前工程结构很适合支持的方向。学生可以先用命令让鸭子走一步，再读懂 50 Hz 控制循环；随后检查策略输入和输出合同，修改奖励函数，在 MuJoCo 中训练步态，最后比较仿真策略和真实身体的差异。\n同一只鸭子可以服务不同难度的课程：初学者调速度和转向；进阶课程写目标检测与跟随状态机；更高阶课程调整 PPO 奖励、观测量和随机化参数。每节课都可以留下可测量的问题，例如“鸭子能否在目标偏离画面中心时边走边转”“速度命令过期后多久停下”“相机处理延迟增加会怎样影响跟随”。\n这条路线的好处是课程围绕真实代码和可重复实验展开。学生不仅训练一个模型，也会学习接口、传感器、时序、控制、安全停止和部署。仿真适合大量试错；实体机器人用来验证模型差异。课程应明确指出仿真成功不等于硬件安全，实体测试需要限速、保护空间和随时可用的停止方式。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#场景三互动故事里的实体角色",
+    "href": "chapters/22-application-scenarios.html#场景三互动故事里的实体角色",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "场景三：互动故事里的实体角色",
+    "text": "场景三：互动故事里的实体角色\n鸭子可以成为桌游、亲子故事或互动展项里的角色。故事系统告诉它“听见线索”“发现角色”“等待选择”或“庆祝成功”，鸭子用转头、靠近、退后、叫声和灯光（若硬件具备）表达反应。孩子不只是看屏幕动画，还能观察一个真实身体如何行动。\n可以从确定性脚本开始：每个故事节点规定可触发事件、动作和超时；相机或麦克风只负责提供事件候选，故事逻辑决定剧情分支。之后再增加物体识别，把“找到红色球”作为任务条件。YOLO 的通用类别不等于任意物品都能识别；专用物件通常需要检查类别覆盖、收集样本并评估误报，不能仅凭一次演示就假设它理解了整个房间。\n这个场景可先使用仿真中的固定舞台和低速动作，不需要自主穿越复杂家庭空间。故事是否好玩，也可以通过“等待是否太久、动作是否读得懂、错误识别是否能恢复”来评估，而不仅是模型准确率。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#场景四博物馆校园和品牌展台的迎宾角色",
+    "href": "chapters/22-application-scenarios.html#场景四博物馆校园和品牌展台的迎宾角色",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "场景四：博物馆、校园和品牌展台的迎宾角色",
+    "text": "场景四：博物馆、校园和品牌展台的迎宾角色\n在展台或校园活动中，鸭子可以站在一个明确的小区域里迎宾、播报短提示、对掌声做反应，或带观众完成一个简单的互动任务。动作编排可控，工作人员也能通过平板或手柄随时切换到停止或待机。\n这类环境通常比家庭更容易布置：活动区域有边界，路线预先规划，工作人员在场，观众知道自己正在和机器人互动。现有 WebRTC、游戏手柄、声音和动作接口可构成演示基础；实际部署还需做多小时稳定性、电池续航、拥挤时避让、音量控制和故障恢复测试。目标检测到有人，并不自动等同于人群安全导航。\n一个可验证的第一版可以完全不自由行走：定点转头和挥动身体，识别到观众进入视野后发出欢迎声。确定交互有效后，再逐步加入受限区域内的短距离移动。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#场景五多只鸭子的合奏和群体表演",
+    "href": "chapters/22-application-scenarios.html#场景五多只鸭子的合奏和群体表演",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "场景五：多只鸭子的合奏和群体表演",
+    "text": "场景五：多只鸭子的合奏和群体表演\n如果几只鸭子能交换稳定身份、共享节拍并按节奏动作，单台机器人就变成了小型机器人乐队。它们可以轮流鸣叫、同步点头、排队移动，或者根据观众鼓掌触发一小段表演。小喇叭适合做有趣的音色和节奏纹理，不必追求完整交响效果。\n工程中已有声音合成和 chorale 群体节拍相关工作；BLE beacon、RSSI 和共享节拍也为“附近有没有同伴”“同伴是否更靠近”提供实验基础。不过，无线机制存在不确定性，距离只能粗略估计；多鸭子同步需要在实际板子和房间里验证延迟、丢包和重连。群体表演适合作为短时、可取消的演示，不适合作为需要严格同步的安全控制。\n有趣的扩展是让表演偶尔自发发生：鸭子检测到同伴后，先对拍，再决定是否合唱。这里的关键不在增加更多命令，而是设计清晰的社会规则和用户许可。用户应能关闭群体互动；关闭后，机器人应停止广播社交状态。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#场景六跟随远程在场与轻量巡游",
+    "href": "chapters/22-application-scenarios.html#场景六跟随远程在场与轻量巡游",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "场景六：跟随、远程在场与轻量巡游",
+    "text": "场景六：跟随、远程在场与轻量巡游\n人物跟随是一个自然的方向：鸭子在场地里跟着主人移动，或由远程用户通过浏览器观察和短距离操控。后者提供一种“远程在场”的感觉，可以用于展示、课堂协作或轻松的远程问候。\n当前跟随实验使用 YOLO 识别画面中的人，再由普通控制逻辑生成转向和前进速度；robotd 调用已有步态策略执行移动。它还没有可靠的身份跟踪、米制距离闭环或家庭级地图导航。因此适合在开阔、受控、有人看护的场景里演示，不应把它描述成可以在陌生住宅里自主跟人、避开宠物和儿童的成品。\n走向可用的远程在场，需要的不止视频流：网络中断时要自动停下；本地要有物理或软件急停；相机和麦克风状态要清楚可见；房间地图和障碍物也需要处理。要做长期值守，还要测量续航、充电、断线恢复和服务更新。现阶段可以先做“远程观看 + 按住才移动”的受限体验，再逐项增加自治能力。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#场景七机器人学习与具身智能实验平台",
+    "href": "chapters/22-application-scenarios.html#场景七机器人学习与具身智能实验平台",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "场景七：机器人学习与具身智能实验平台",
+    "text": "场景七：机器人学习与具身智能实验平台\n对开发者而言，MicroDuck 也是一套从策略训练到身体执行的研究平台。可以研究步态泛化、域随机化、目标条件控制、视觉和深度融合、多机协同，以及高层任务如何调用低层运动策略。\n实验优势在于模块边界清晰：仿真身体更新动力学，robotd 管高频控制，感知脚本处理图像，高层状态机把任务转成运动意图。研究者可以分别测量每一层的延迟、成功率和失败恢复能力，然后比较“单独优化感知”“单独优化控制”和“端到端训练”带来的变化。\n真实的科研贡献来自有对照、有重复、有失败记录的实验，而不只是让鸭子完成一次看起来聪明的演示。每个实验应固定场景、记录软件版本和随机种子，报告碰撞、跌倒、目标丢失和安全停止等指标。仿真器能扩大样本量；真实硬件负责揭示模型没有覆盖的摩擦、延迟、供电和传感器问题。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#哪些任务暂时不适合",
+    "href": "chapters/22-application-scenarios.html#哪些任务暂时不适合",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "哪些任务暂时不适合",
+    "text": "哪些任务暂时不适合\n有些愿望看上去很自然，但现在不应该交给这只鸭子独立完成：\n\n拿取、搬运和递交物品。它没有手部操作机构，也没有抓取和操作策略。\n在真实家庭中无人看管地巡逻、找人或穿过拥挤区域。尚缺成熟的定位、地图、动态障碍避让和失效保护。\n搀扶老人、保护幼儿或承担安全监控。机器人很轻小，当前感知和移动能力没有达到这种责任等级。\n把“识别到某物”当作理解其用途、位置和危险性。检测框是感知结果，不是常识推理或可靠任务规划。\n\n面对这些方向，可以把研究问题拆小：先让机器人识别“区域里有障碍”，再验证低速停止；先在模拟房间里跑固定路线，再测定位漂移；先做受监督的玩具互动，再评估误触与恢复。每一步都要定义失败时的安全状态。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/22-application-scenarios.html#从畅想到第一个原型",
+    "href": "chapters/22-application-scenarios.html#从畅想到第一个原型",
+    "title": "第二十二章：这只鸭子还能做什么",
+    "section": "从畅想到第一个原型",
+    "text": "从畅想到第一个原型\n按“最容易验证价值，同时能复用现有模块”的顺序，可以先做三个原型：\n\n桌面问候角色：相机或声音提供一次性事件，状态机安排转头、叫声和超时回到安静状态；不保存身份。\n课堂里的跟随实验：在仿真中改变目标速度、相机延迟和检测频率，记录目标丢失后的搜索与停止行为。\n多鸭子节奏表演：先让两只机器人在固定位置同步点头和发声，再测试距离、掉线与用户关闭选项。\n\n这三种原型分别验证性格交互、感知到运动的闭环，以及群体协同。它们也覆盖 sounds、robotd 行为、相机、BLE、仿真和训练等不同工程模块。完成原型后，再用用户反馈决定要不要投入更复杂的导航、长期记忆或板端模型部署。\n判断一个应用是否值得继续，可以记住一句话：先找到鸭子用身体带来的独特价值，再确认它能在明确边界里可靠地表达这种价值。",
+    "crumbs": [
+      "<span class='chapter-number'>22</span>  <span class='chapter-title'>第二十二章：这只鸭子还能做什么</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/A-module-index.html",
+    "href": "chapters/A-module-index.html",
+    "title": "附录 A — 附录 A：完整模块索引",
+    "section": "",
+    "text": "常驻服务与客户端\n本表覆盖 microduck Cargo workspace 的全部 23 个成员。目录名通常就是 crate 名；二进制服务与同名库有时位于一个 crate 中。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>附录 A：完整模块索引</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/A-module-index.html#常驻服务与客户端",
+    "href": "chapters/A-module-index.html#常驻服务与客户端",
+    "title": "附录 A — 附录 A：完整模块索引",
+    "section": "",
+    "text": "crate\n角色\n主要入口\n\n\n\n\nbtd\nBLE GATT 入口、请求路由与授权\nbtd/src/\n\n\nconfigd\n网络、身份、配对和系统配置服务\nconfigd/src/\n\n\nmediad\n相机、麦克风、WebRTC 和本地控制台\nmediad/src/\n\n\npadd\nLinux 游戏手柄采集和控制意图\npadd/src/\n\n\nrobotd\n50 Hz 控制循环、策略与安全层\nrobotd/src/main.rs\n\n\nupdater\n更新引擎与 updaterd 服务\nupdater/src/\n\n\ntof\n深度传感器库与 tofd\ntof/src/\n\n\nrobotctl\n机器人本机 CLI 和 monitor\nrobotctl/src/\n\n\nduckctl\n电脑端 BLE CLI\nduckctl/src/",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>附录 A：完整模块索引</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/A-module-index.html#共用库和协议",
+    "href": "chapters/A-module-index.html#共用库和协议",
+    "title": "附录 A — 附录 A：完整模块索引",
+    "section": "共用库和协议",
+    "text": "共用库和协议\n\n\n\n\n\n\n\n\ncrate\n角色\n主要入口\n\n\n\n\nduck-control\n机器人控制、模型、I/O 与策略机制\nduck-control/src/\n\n\nduck-ipc-proto\n服务 API、JSON-RPC 类型和 socket 路径\nduck-ipc-proto/src/lib.rs\n\n\nduck-ble\nBLE 广播、协议分帧与辅助代码\nduck-ble/src/\n\n\nduck-detect\n运行时视觉检测后端\nduck-detect/src/\n\n\nduck-ether\n仿真中模拟的广播链路\nduck-ether/src/\n\n\nkinematics\nMJCF 和正向运动学\nkinematics/src/\n\n\nodometry\n脚底接触与 IMU 局部里程计\nodometry/src/\n\n\npad-imu\n游戏手柄 IMU 姿态与动作融合\npad-imu/src/\n\n\npet-detect\n板载麦克风声音事件检测\npet-detect/src/\n\n\nrobotd-params\nrobotd 参数结构、默认值和校验\nrobotd-params/src/\n\n\nsounds\n声音合成、音色和合奏\nsounds/src/\n\n\nuyvy\nUYVY 帧像素格式处理\nuyvy/src/",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>附录 A：完整模块索引</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/A-module-index.html#工程和验证工具",
+    "href": "chapters/A-module-index.html#工程和验证工具",
+    "title": "附录 A — 附录 A：完整模块索引",
+    "section": "工程和验证工具",
+    "text": "工程和验证工具\n\n\n\ncrate\n角色\n\n\n\n\ntest-support\n更新、签名与发行测试所用辅助设施\n\n\nxtask\n开发机发行打包、签名流程接口和晋升辅助\n\n\n\n额外目录不属于 Cargo crate，但也是产品交付的一部分：deploy/ 是板端默认配置；hooks/ 定义更新钩子；scripts/ 负责安装、交叉构建、仿真和 CI；docs/ 区分使用说明、机制设计和项目记录；policies/ 可保存本地策略资产。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>附录 A：完整模块索引</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/A-module-index.html#强化学习仓库",
+    "href": "chapters/A-module-index.html#强化学习仓库",
+    "title": "附录 A — 附录 A：完整模块索引",
+    "section": "强化学习仓库",
+    "text": "强化学习仓库\n\n\n\n路径\n角色\n\n\n\n\nsrc/mjlab_microduck/robot/\nMJCF 模型、关节常量与场景资产\n\n\nsrc/mjlab_microduck/actuator/\nBAM 执行器和摩擦/电压随机化\n\n\nsrc/mjlab_microduck/tasks/\n任务注册、MDP 和环境配置\n\n\nsrc/mjlab_microduck/sim/\nMuJoCo body server、相机、ToF 仿真\n\n\nsrc/mjlab_microduck/export.py\n由 checkpoint 导出运行时策略\n\n\nsrc/mjlab_microduck/publish/\nmanifest 验证与 Hub 发布\n\n\nscripts/\n演示、比较、绘图、模型转换与测试台工具\n\n\ntests/\n任务配置、物理模型与发布合同验证",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>A</span>  <span class='chapter-title'>附录 A：完整模块索引</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/B-command-reference.html",
+    "href": "chapters/B-command-reference.html",
+    "title": "附录 B — 附录 B：学习路径命令速查",
+    "section": "",
+    "text": "仿真与手动控制\n以下命令以两个仓库在本工作区的脚本名为准。路径、端口和数据目录可按本机环境调整；先运行子命令 help 查看当前版本的可用参数。\ndrive 的两个数字分别是前进速度和偏航角速度。命令意图会过期，长时间移动要持续刷新，控制程序退出也要发停止命令。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>B</span>  <span class='chapter-title'>附录 B：学习路径命令速查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/B-command-reference.html#仿真与手动控制",
+    "href": "chapters/B-command-reference.html#仿真与手动控制",
+    "title": "附录 B — 附录 B：学习路径命令速查",
+    "section": "",
+    "text": "cd /Users/suhao/github/robotic_ai/microduck\nexport DUCK_SIM_RL=/Users/suhao/github/robotic_ai/microduck_rl\n\nscripts/duck-sim up\nscripts/duck-sim status\nscripts/duck-sim realtime\nscripts/duck-sim monitor\nscripts/duck-sim drive 0.12 0.4\nscripts/duck-sim down",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>B</span>  <span class='chapter-title'>附录 B：学习路径命令速查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/B-command-reference.html#人物跟随场景",
+    "href": "chapters/B-command-reference.html#人物跟随场景",
+    "title": "附录 B — 附录 B：学习路径命令速查",
+    "section": "人物跟随场景",
+    "text": "人物跟随场景\nDUCK_SIM_SCENE=approach +DUCK_SIM_CAMERAS=a +DUCK_SIM_MOVE_TARGET=follow_person +scripts/duck-sim up\n仿真 launcher 提供 follow 教学入口时，也可以使用 scripts/duck-sim follow。视觉脚本默认运行有限时长；加入 –drive 会实际移动模拟鸭子，加入 –seconds 0 会持续运行到 Ctrl-C。第一次学习先不加 drive，只检查类别和框。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>B</span>  <span class='chapter-title'>附录 B：学习路径命令速查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/B-command-reference.html#强化学习",
+    "href": "chapters/B-command-reference.html#强化学习",
+    "title": "附录 B — 附录 B：学习路径命令速查",
+    "section": "强化学习",
+    "text": "强化学习\ncd /Users/suhao/github/robotic_ai/microduck_rl\n\nuv sync\nuv run list-envs\nuv run train Mjlab-Velocity-Flat-MicroDuck --env.scene.num-envs 4096\nuv run play Mjlab-Velocity-Flat-MicroDuck --wandb-run-path ENTITY/PROJECT/RUN\nuv run scripts/export.py Mjlab-Velocity-Flat-MicroDuck --wandb-run-path ENTITY/PROJECT/RUN\n本地训练路径要求 CUDA GPU 和 uv。若没有合适 GPU，使用仓库提供的 HF Jobs 参数让远程 GPU 运行；不要因 Mac 可以安装 PyTorch 就推断 MuJoCo Warp PPO 能按 README 的速度训练。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>B</span>  <span class='chapter-title'>附录 B：学习路径命令速查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/B-command-reference.html#开始阅读源码的文件",
+    "href": "chapters/B-command-reference.html#开始阅读源码的文件",
+    "title": "附录 B — 附录 B：学习路径命令速查",
+    "section": "开始阅读源码的文件",
+    "text": "开始阅读源码的文件\nmicroduck/CONTRIBUTING.md\nmicroduck/docs/design/architecture.md\nmicroduck/docs/design/robotd-design.md\nmicroduck/docs/design/updater-design.md\nmicroduck/docs/design/simulation.md\nmicroduck_rl/README.md\nmicroduck_rl/src/mjlab_microduck/tasks/__init__.py\nmicroduck_rl/src/mjlab_microduck/tasks/mdp.py\nmicroduck/scripts/duck_vision_follow.py",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>B</span>  <span class='chapter-title'>附录 B：学习路径命令速查</span>"
+    ]
+  },
+  {
+    "objectID": "chapters/C-glossary.html",
+    "href": "chapters/C-glossary.html",
+    "title": "附录 C — 附录 C：术语表",
+    "section": "",
+    "text": "术语\n含义\n\n\n\n\nActor\nPPO 中负责根据观测选择动作的策略网络；部署时通常只需 actor。\n\n\nApplied command\n经过服务选择和安全处理后，当前实际生效的控制目标。\n\n\nBAM\n用于模拟实际执行器物理的模型/工具链；此项目针对 XL330 加入电压和摩擦影响。\n\n\nDeadman\n定期续期的控制意图租约；客户端停止刷新后系统让机器人停止。\n\n\nDomain randomization\n训练期间在合理范围随机化物理和传感器参数，提升变化条件下的鲁棒性。\n\n\nEPUB\n面向电子书阅读器的开放电子书格式，支持目录、章节导航和可重排文字。\n\n\nIPC\n不同进程之间的通信；此运行时主要使用 Unix socket 和 JSON-RPC。\n\n\nMJCF\nMuJoCo 使用的模型描述格式，定义身体几何、关节、质量、接触和传感器。\n\n\nMDP\n马尔可夫决策过程；强化学习环境用它定义状态、动作、奖励、转移和结束。\n\n\nmocap\nMuJoCo 的运动捕获/运动学刚体；场景控制代码直接更新它的位置与姿态。\n\n\nObservation\n策略接收的数值状态向量；本项目可部署 actor 合同是 61 维。\n\n\nONNX\n跨运行时的神经网络交换格式，用于把训练结果交给机器人推理引擎。\n\n\nPPO\n近端策略优化算法；本训练仓库用于从模拟经验更新策略。\n\n\nRemoteIo\nrobotd 中通过网络连接远程 MuJoCo 身体的仿真 I/O 实现。\n\n\nSim2real\n将仿真训练或验证得到的策略迁移到真实机器人硬件。\n\n\nToF\nTime of Flight 飞行时间测距传感器；本项目头部深度模组提供稀疏 8×8 距离。\n\n\nUYVY\n交错的 YUV 4:2:2 像素格式；模拟相机帧通道以此格式传图。\n\n\nVIO / odometry\n视觉惯性定位或局部里程计；当前 odometry 主要结合脚部锚点与 IMU。\n\n\nWebRTC\n实时音视频与数据传输技术；机器人控制台用它传视频和远程控制通道。\n\n\nYOLO\n一类实时目标检测模型家族；本实验使用 Ultralytics 预训练权重识别 COCO 类别。\n\n\n观测归一化\n对策略输入进行尺度变换；导出时必须与训练和运行时的合同保持一致。\n\n\n策略槽位\nrobotd 配置中的命名模型位置，例如 walking 或 recover 等不同用途。\n\n\n控制意图\n上层请求的速度或行为目标，不等于单个关节的直接伺服命令。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>C</span>  <span class='chapter-title'>附录 C：术语表</span>"
+    ]
+  },
+  {
+    "objectID": "production-comparison.html",
+    "href": "production-comparison.html",
+    "title": "附录 D — 附录 D：成书方案与写作技能对比",
+    "section": "",
+    "text": "找到的写作技能\n这次重新成书前，先比较“写作指导技能”和“书籍输出工具”。两者解决的问题不同：skill 告诉代理怎样组织、校对或调用工具；Quarto、mdBook 和 Pandoc 才负责将书稿编译成读者能打开的格式。检索与采用数据按 2026-10-03 可见页面记录，安装量和仓库 star 会继续变化。\n公开页面：\n这里的采用量是公开页面的快照，不是质量排名。仓库 star 也不能证明特定 skill 写出来的书就准确。真正决定质量的仍是内容证据、读者结构和渲染检查。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>D</span>  <span class='chapter-title'>附录 D：成书方案与写作技能对比</span>"
+    ]
+  },
+  {
+    "objectID": "production-comparison.html#找到的写作技能",
+    "href": "production-comparison.html#找到的写作技能",
+    "title": "附录 D — 附录 D：成书方案与写作技能对比",
+    "section": "",
+    "text": "方案\n类型与公开采用情况\n强项\n主要局限\n本书中的取舍\n\n\n\n\nPosit quarto-authoring\nQuarto 专项 skill；skills.sh 显示约 1.2K 安装，源仓库约 526 stars，页面安全扫描通过\n指导 QMD、章节结构、交叉引用、Quarto 渲染和格式选项；直接面向书籍制作工具\n依赖安装 Quarto；内容是否准确仍要回到项目源码核对\n采用其工具链思路，用 Quarto 项目和分章源文件成书\n\n\nWondelai technical-documentation\n通用技术写作 skill；页面约 755 安装，仓库约 2.3K stars，扫描通过\n强调按读者任务组织、步骤和事实核对，适合技术解释\n不负责电子书排版或 EPUB 导航\n作为内容检查原则；路径、数字和命令逐项回核本工程\n\n\nAnthropic documentation\n知识工作插件中的文档 skill；页面约 9.9K 安装，仓库约 25.9K stars，扫描通过\n采用广、覆盖开发者文档与知识整理，适合建立文档清单\n范围宽，不是专门的成书、插图或电子书排版工作流\n借鉴文档任务拆解；不作为排版引擎\n\n\nModelScope epub-creator\n专用 EPUB skill；检索页显示约 1 次安装，声誉和采用数据不足\n目标很直接，面向 Markdown 转 EPUB，依赖 ebooklib 等组件\n安装样本很少；偏打包，不足以组织 20 多章的课程与网页预览\n未选用；EPUB 交给维护成熟的 Quarto 发布器\n\n\n\n\n\nPosit quarto-authoring skill · Posit skills source\nWondelai technical-documentation skill · Wondelai source\nAnthropic documentation skill · Anthropic plugin source\nModelScope EPUB creator",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>D</span>  <span class='chapter-title'>附录 D：成书方案与写作技能对比</span>"
+    ]
+  },
+  {
+    "objectID": "production-comparison.html#成书工具与输出比较",
+    "href": "production-comparison.html#成书工具与输出比较",
+    "title": "附录 D — 附录 D：成书方案与写作技能对比",
+    "section": "成书工具与输出比较",
+    "text": "成书工具与输出比较\n\n\n\n\n\n\n\n\n\n工具链\n电子书能力\n章节/网页阅读体验\n适用情况\n\n\n\n\nQuarto book\n原生输出 EPUB、PDF、HTML、Word 等格式；EPUB 有封面、目录与 CSS 支持\n一个章节源文件可输出成带搜索的书籍网站，交叉引用可连接章节、图和表\n需要同时交付手机 EPUB、电脑网页和可维护分章源文件，本书采用\n\n\nmdBook\n内置主要输出是 HTML 和 Markdown；EPUB 依赖社区渲染器插件\n对 Rust 项目文档网站和章节导航很成熟\n重点是在线开发手册、要与 Rust 文档风格一致时合适\n\n\nPandoc\n可以从 Markdown 直接转换 EPUB、HTML、PDF 等格式\n转换能力强；成书导航和网站项目要自行设计编排\n已有成熟 Markdown 书稿，只想转换或接入自定义出版流水线时合适\n\n\n手写 EPUB 打包脚本\n可完全控制容器结构和元数据\n目录、样式、封面适配都必须自己维护和验证\nEPUB 标准实验或特殊出版需求；普通技术书维护成本偏高\n\n\n\nQuarto 官方手册明确支持书籍项目、分章管理、HTML 与 EPUB 输出；mdBook 的内建 renderer 页面列出 HTML 与 Markdown，并将 EPUB 留给外部插件；Pandoc 的官方用户手册提供 EPUB writer。参考：Quarto Books、Quarto EPUB format、mdBook renderers、Pandoc EPUB documentation。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>D</span>  <span class='chapter-title'>附录 D：成书方案与写作技能对比</span>"
+    ]
+  },
+  {
+    "objectID": "production-comparison.html#最终选择",
+    "href": "production-comparison.html#最终选择",
+    "title": "附录 D — 附录 D：成书方案与写作技能对比",
+    "section": "最终选择",
+    "text": "最终选择\n书稿采用 Quarto，内容按章节拆成 QMD 文件，输出 HTML 教材网站与 EPUB。页面共用定制 CSS，封面单独制作；来源、模块索引与命令表作为书内附录。这样读者手机上可以直接打开 EPUB，电脑上可以搜索 HTML，维护者又能在后续提交中只修改相关章节。",
+    "crumbs": [
+      "附录",
+      "<span class='chapter-number'>D</span>  <span class='chapter-title'>附录 D：成书方案与写作技能对比</span>"
+    ]
+  }
+]

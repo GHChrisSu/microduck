@@ -1,0 +1,55 @@
+# 附录 B：学习路径命令速查
+
+以下命令以两个仓库在本工作区的脚本名为准。路径、端口和数据目录可按本机环境调整；先运行子命令 help 查看当前版本的可用参数。
+
+## 仿真与手动控制
+
+~~~~bash
+cd /Users/suhao/github/robotic_ai/microduck
+export DUCK_SIM_RL=/Users/suhao/github/robotic_ai/microduck_rl
+
+scripts/duck-sim up
+scripts/duck-sim status
+scripts/duck-sim realtime
+scripts/duck-sim monitor
+scripts/duck-sim drive 0.12 0.4
+scripts/duck-sim down
+~~~~
+
+drive 的两个数字分别是前进速度和偏航角速度。命令意图会过期，长时间移动要持续刷新，控制程序退出也要发停止命令。
+
+## 人物跟随场景
+
+~~~~bash
+DUCK_SIM_SCENE=approach +DUCK_SIM_CAMERAS=a +DUCK_SIM_MOVE_TARGET=follow_person +scripts/duck-sim up
+~~~~
+
+仿真 launcher 提供 follow 教学入口时，也可以使用 scripts/duck-sim follow。视觉脚本默认运行有限时长；加入 --drive 会实际移动模拟鸭子，加入 --seconds 0 会持续运行到 Ctrl-C。第一次学习先不加 drive，只检查类别和框。
+
+## 强化学习
+
+~~~~bash
+cd /Users/suhao/github/robotic_ai/microduck_rl
+
+uv sync
+uv run list-envs
+uv run train Mjlab-Velocity-Flat-MicroDuck --env.scene.num-envs 4096
+uv run play Mjlab-Velocity-Flat-MicroDuck --wandb-run-path ENTITY/PROJECT/RUN
+uv run scripts/export.py Mjlab-Velocity-Flat-MicroDuck --wandb-run-path ENTITY/PROJECT/RUN
+~~~~
+
+本地训练路径要求 CUDA GPU 和 uv。若没有合适 GPU，使用仓库提供的 HF Jobs 参数让远程 GPU 运行；不要因 Mac 可以安装 PyTorch 就推断 MuJoCo Warp PPO 能按 README 的速度训练。
+
+## 开始阅读源码的文件
+
+~~~~text
+microduck/CONTRIBUTING.md
+microduck/docs/design/architecture.md
+microduck/docs/design/robotd-design.md
+microduck/docs/design/updater-design.md
+microduck/docs/design/simulation.md
+microduck_rl/README.md
+microduck_rl/src/mjlab_microduck/tasks/__init__.py
+microduck_rl/src/mjlab_microduck/tasks/mdp.py
+microduck/scripts/duck_vision_follow.py
+~~~~

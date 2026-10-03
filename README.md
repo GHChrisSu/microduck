@@ -86,6 +86,7 @@ It also sits, kicks a ball, rolls forward on command, and quacks in a voice that
 | [Dev cheat sheet](docs/robot/cheatsheet-dev.md) | Branch builds, release candidates, driving from a laptop, and the restart traps after an update. |
 | [Push your branch](docs/robot/dev-push.md) | Build on your machine, install over ssh, about a minute. |
 | [The simulated duck](docs/robot/simulation.md) | No robot on the desk? `scripts/duck-sim` runs the real daemons against a body in MuJoCo — one duck in a window, or four as machines you log into. |
+| [MicroDuck 手机学习书（EPUB）](docs/books/microduck-handbook/_book/microduck-learning.epub) | 完整中文教材：Rust 运行时、训练、仿真、YOLO 人物跟随；另有[网页版](docs/books/microduck-handbook/_book/index.html)和[分章原稿](docs/books/microduck-handbook/index.qmd)。 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing, layout, conventions, releasing. |
 | [Docs index](docs/README.md) | Everything, including the design pages and the open problems. |
 

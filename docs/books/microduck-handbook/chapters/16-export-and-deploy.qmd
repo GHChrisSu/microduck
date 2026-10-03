@@ -1,0 +1,23 @@
+# 第十六章：训练、导出、发布和部署
+
+训练到部署至少经过四个阶段：训练环境运行；结果检查与选取 checkpoint；导出可执行 actor；发布并在机器人上安装。每一阶段都有单独失败模式，应该逐段验证，而不是把一次长训练当作“模型已做好”。
+
+## 快速训练与恢复
+
+仓库 README 提供 Velocity Flat 示例，用 uv run train 启动注册任务，并把并行场景数量设为 4096。该配置针对 CUDA 机器的 GPU 吞吐量。训练运行名和 checkpoint 路径决定如何恢复实验；resume 要确认 task、环境配置和模型架构与原运行一致。
+
+训练日志应同时查看奖励趋势、摔倒率、速度误差、动作幅度和现场视频。单个总 reward 可能掩盖一种速度下表现很好、另一种速度下总摔倒的策略。通过 play 运行 checkpoint，观察在随机命令与多个初始姿态下是否稳定。
+
+## ONNX 导出
+
+scripts/export.py 从训练 runner 加载 checkpoint，并通过官方 runner exporter 导出 ONNX。它将观测 normalizer 一起写进图中。导出后要确认元数据任务、版本和张量形状，再用项目自己的推理程序做一次仿真回放。
+
+## manifest 与发布
+
+publish 子命令把 ONNX 与 manifest.json 包成组件，检查 [1,61] 输入与 [1,14] 输出，执行推理 smoke check，然后上传仓库。manifest 描述 kind、动作类型、时长和模型来源；机器人用它判断组件槽位与用户可见信息。
+
+## 安装到 robotd
+
+板端的机器人运行时负责验证策略接口并载入网络。用 robotctl policy list、check、install、load 等命令管理模型和槽位；实际子命令以该 checkout 的 help 为准。策略更新与 daemon 更新独立，因此可以迭代步态而不必为每个模型改动重新发行 Rust 服务。
+
+发布到真实机器人之前，先用仿真动作检查方向、站立姿势、关节顺序和安全停止。如果模型载入成功但运动明显不对，立即停下并检查 observation normalization、joint order、home offset 和命令槽位，不要用大速度继续“让它适应”。

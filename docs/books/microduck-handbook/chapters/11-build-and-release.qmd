@@ -1,0 +1,19 @@
+# 第十一章：从本地代码到板端版本
+
+microduck 仓库的日常开发主要使用 Cargo workspace。贡献指南要求 Rust stable 1.99 以上。macOS 可以构建大多数组件；Linux 上还需要 GStreamer 与 libudev 开发包。某些 BlueZ、NetworkManager 和硬件访问代码只在 Linux 目标编译，因此 Mac 上构建通过，并不能证明板端路径正确。
+
+## 本机开发与仿真
+
+开发功能时先选择最小 crate 构建，再在需要时构建整个 workspace。模拟器运行真实 robotd 和同一套 IPC API，所以它适合验证服务间交互、策略切换、控制台和大多数更新逻辑。驱动器、实际蓝牙射频、摄像头 ISP 和板端 NPU 不在笔记本模拟范围内。
+
+## dev-push 和安装边界
+
+scripts/dev-push.sh 在开发机上构建目标程序，再通过受控更新路径装到板子。它可用 cargo zigbuild 交叉编译，也可使用容器构建。测试机器人上的开发构建仍走版本和健康检查，所以发生失败时可以回退；直接 scp 覆盖运行二进制会绕开这条保障。
+
+## xtask 和 CI 发布
+
+xtask package、sign、promote 负责形成和晋升发行物。生产签名在 CI 完成，不在开发者机器保存发布密钥。staging 预发布先让机器人安装和观察，稳定发布再晋升相同产物。Cargo 版本、Git 标签与包元数据必须匹配，避免机器人报告的版本与实际字节不一致。
+
+## 测试应该验证什么
+
+单元测试适合纯算法、输入输出和配置校验；更新系统测试则要把签名错误、postinstall 故障、健康检查失败和切换时断电作为完整流程注入。Linux-only 集成还需要在目标系统环境验证。先看 microduck/CONTRIBUTING.md 和 scripts/board-test.sh，按机制挑检查，而不是把一次 Mac 全量构建当作所有平台验证。

@@ -7,6 +7,10 @@ one in front of you and want to drive it, start at the [cheat sheet](robot/cheat
 *against* a duck rather than changing it — running a model too heavy for the board, getting the
 camera into their own program, why a Space cannot connect.
 
+For a guided route through the project, see the [MicroDuck mobile learning book](books/microduck-handbook/_book/microduck-learning.epub) (EPUB), the [searchable web edition](books/microduck-handbook/_book/index.html), or the [Quarto source](books/microduck-handbook/index.qmd). It covers the Rust runtime, reinforcement-learning workflow, simulator, and the complete YOLO person-following loop. A comparison of book-authoring skills and tools appears in the final appendix.
+
+For a code-level walkthrough of the current YOLO follow behaviour-cloning example, see the [follow-policy tutorial](tutorials/follow-policy-code-tour.zh-CN.md).
+
 It is also where a **publisher** starts: [`policy-manifest.md`](policy-manifest.md) is the
 contract for a `manifest.json` beside a microduck `.onnx`, and it owns every field. The design
 docs give the reasoning and point at it.

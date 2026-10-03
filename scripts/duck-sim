@@ -12,6 +12,11 @@
 #   DUCK_SIM_CAMERAS=a scripts/duck-sim
 #   scripts/duck-sim ctl account login    # type the code at hf.co/oauth/device
 #
+# To practise vision-guided following in the moving-person scene:
+#
+#   DUCK_SIM_SCENE=approach DUCK_SIM_CAMERAS=a DUCK_SIM_MOVE_TARGET=follow_person scripts/duck-sim
+#   scripts/duck-sim follow    # restart in that scene, then follow until Ctrl-C
+#
 # It then appears in that account's robot list, flagged `simulated` — so nobody drives a duck in
 # MuJoCo believing it is the one on the shelf.
 #
@@ -64,6 +69,11 @@ SCENE="${DUCK_SIM_SCENE:-}"
 # 8080 + its index.
 CAMERAS="${DUCK_SIM_CAMERAS:-}"
 FRAME_PORT="${DUCK_SIM_FRAME_PORT:-7901}"
+MOVE_TARGET="${DUCK_SIM_MOVE_TARGET:-}"
+TARGET_MOTION_AMPLITUDE="${DUCK_SIM_TARGET_MOTION_AMPLITUDE:-1.2}"
+TARGET_MOTION_PERIOD="${DUCK_SIM_TARGET_MOTION_PERIOD:-12}"
+TARGET_MOTION_LATERAL_AMPLITUDE="${DUCK_SIM_TARGET_MOTION_LATERAL_AMPLITUDE:-1.2}"
+TARGET_MOTION_SPEED="${DUCK_SIM_TARGET_MOTION_SPEED:-0.10}"
 SOCK="$STATE/duck.sock"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -478,6 +488,7 @@ WHY
                 --updater-socket "$STATE/$name-updater.sock" \
                 --token "$STATE/$name/hf-token" \
                 --frame-socket "$STATE/$name-frame.sock" \
+                --rotate 0 \
                 --port $((8443 + i)) --web-port $((8080 + i)) \
                 > "$STATE/$name-media.log" 2>&1 &
             echo $! > "$STATE/$name-media.pid"
@@ -664,10 +675,20 @@ start_body() {
     if [ -n "$CAMERAS" ]; then
         cam_args="--cameras $CAMERAS --frame-port $FRAME_PORT --camera-fps 30"
     fi
+    target_args=""
+    if [ -n "$MOVE_TARGET" ]; then
+        if [ "$MOVE_TARGET" = follow_person ]; then
+            target_args="--move-target $MOVE_TARGET --target-motion-speed $TARGET_MOTION_SPEED"
+        else
+            target_args="--move-target $MOVE_TARGET --target-motion-amplitude $TARGET_MOTION_AMPLITUDE \
+                --target-motion-period $TARGET_MOTION_PERIOD \
+                --target-motion-lateral-amplitude $TARGET_MOTION_LATERAL_AMPLITUDE"
+        fi
+    fi
     # shellcheck disable=SC2086
     $SETSID nohup "$PY_BIN" -m mjlab_microduck.sim.body_server \
         --port "$PORT" --ducks "$DUCKS" --keyframe "${DUCK_SIM_KEYFRAME:-SIT}" $HEADLESS $scene_arg \
-        $cam_args \
+        $cam_args $target_args \
         > "$STATE/body.log" 2>&1 &
     echo $! > "$STATE/body.pid"
     if ! wait_for_port; then
@@ -756,6 +777,34 @@ PY
         *) say "the world is at ${factor}x real time — below 1.0 the policies cannot balance. \
 Try DUCK_SIM_VIEWER=0, or fewer ducks." ;;
     esac
+}
+
+follow() {
+    # The simulator alone does not issue movement commands. Bring up the complete lesson
+    # scene, then keep the camera-driven controller running until the user interrupts it.
+    SCENE=approach
+    CAMERAS=a
+    MOVE_TARGET=follow_person
+    TARGET_MOTION_SPEED="${DUCK_SIM_TARGET_MOTION_SPEED:-0.10}"
+    DUCK_SIM_KEYFRAME=HOME
+    export DUCK_SIM_KEYFRAME
+    say "starting the unbounded forward-running person and follow behavior; press Ctrl-C to stop"
+    up
+    FOLLOW_POLICY="${DUCK_SIM_FOLLOW_POLICY:-$STATE/follow-training/follow-policy.ts}"
+    if [ -f "$FOLLOW_POLICY" ]; then
+        say "using learned follow policy $FOLLOW_POLICY"
+        "$RL/.venv/bin/python" "$REPO/scripts/duck_vision_follow.py" \
+            --target person --rotate 0 --drive --seconds 0 --max-forward 0.40 \
+            --policy "$FOLLOW_POLICY" \
+            --policy-forward-scale "${DUCK_SIM_FOLLOW_POLICY_FORWARD_SCALE:-1.25}" \
+            --stop-area 0.06 --stop-height 0.45 --search-yaw 0.30 \
+            --search-leg-seconds 2.5 --search-pause-seconds 0.45
+    else
+        "$RL/.venv/bin/python" "$REPO/scripts/duck_vision_follow.py" \
+            --target person --rotate 0 --drive --seconds 0 --max-forward 0.40 \
+            --stop-area 0.06 --stop-height 0.45 --search-yaw 0.30 \
+            --search-leg-seconds 2.5 --search-pause-seconds 0.45
+    fi
 }
 
 # ── the container ─────────────────────────────────────────────────────────────
@@ -1108,6 +1157,7 @@ case "${1:-up}" in
     boot)    shift; DUCKS="${1:-$DUCKS}"; boot ;;
     shell)   shift; shell "$@" ;;
     down)    down_containers; down ;;
+    follow)  follow ;;
     drive)   shift; drive "$@" ;;
     ctl)     shift; ctl "$@" ;;
     stand)   stand && sleep 6 && upright ;;
@@ -1116,5 +1166,5 @@ case "${1:-up}" in
     log)     tail -f "$STATE/robotd.log" ;;
     simlog)  tail -f "$STATE/body.log" ;;
     realtime) realtime ;;
-    *)       die "unknown command '$1'. Try: up, boot, shell, down, stand, drive, monitor, ctl, log, simlog, status, realtime" ;;
+    *)       die "unknown command '$1'. Try: up, follow, boot, shell, down, stand, drive, monitor, ctl, log, simlog, status, realtime" ;;
 esac

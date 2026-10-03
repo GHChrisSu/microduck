@@ -1,0 +1,36 @@
+# 附录 D：成书方案与写作技能对比
+
+这次重新成书前，先比较“写作指导技能”和“书籍输出工具”。两者解决的问题不同：skill 告诉代理怎样组织、校对或调用工具；Quarto、mdBook 和 Pandoc 才负责将书稿编译成读者能打开的格式。检索与采用数据按 2026-10-03 可见页面记录，安装量和仓库 star 会继续变化。
+
+## 找到的写作技能
+
+| 方案 | 类型与公开采用情况 | 强项 | 主要局限 | 本书中的取舍 |
+|---|---|---|---|---|
+| Posit quarto-authoring | Quarto 专项 skill；skills.sh 显示约 1.2K 安装，源仓库约 526 stars，页面安全扫描通过 | 指导 QMD、章节结构、交叉引用、Quarto 渲染和格式选项；直接面向书籍制作工具 | 依赖安装 Quarto；内容是否准确仍要回到项目源码核对 | 采用其工具链思路，用 Quarto 项目和分章源文件成书 |
+| Wondelai technical-documentation | 通用技术写作 skill；页面约 755 安装，仓库约 2.3K stars，扫描通过 | 强调按读者任务组织、步骤和事实核对，适合技术解释 | 不负责电子书排版或 EPUB 导航 | 作为内容检查原则；路径、数字和命令逐项回核本工程 |
+| Anthropic documentation | 知识工作插件中的文档 skill；页面约 9.9K 安装，仓库约 25.9K stars，扫描通过 | 采用广、覆盖开发者文档与知识整理，适合建立文档清单 | 范围宽，不是专门的成书、插图或电子书排版工作流 | 借鉴文档任务拆解；不作为排版引擎 |
+| ModelScope epub-creator | 专用 EPUB skill；检索页显示约 1 次安装，声誉和采用数据不足 | 目标很直接，面向 Markdown 转 EPUB，依赖 ebooklib 等组件 | 安装样本很少；偏打包，不足以组织 20 多章的课程与网页预览 | 未选用；EPUB 交给维护成熟的 Quarto 发布器 |
+
+公开页面：
+
+- [Posit quarto-authoring skill](https://www.skills.sh/posit-dev/skills/quarto-authoring) · [Posit skills source](https://github.com/posit-dev/skills)
+- [Wondelai technical-documentation skill](https://www.skills.sh/wondelai/skills/technical-documentation) · [Wondelai source](https://github.com/wondelai/skills)
+- [Anthropic documentation skill](https://www.skills.sh/anthropics/knowledge-work-plugins/documentation) · [Anthropic plugin source](https://github.com/anthropics/knowledge-work-plugins)
+- [ModelScope EPUB creator](https://www.skills.sh/site/modelscope.cn/epub-creator)
+
+这里的采用量是公开页面的快照，不是质量排名。仓库 star 也不能证明特定 skill 写出来的书就准确。真正决定质量的仍是内容证据、读者结构和渲染检查。
+
+## 成书工具与输出比较
+
+| 工具链 | 电子书能力 | 章节/网页阅读体验 | 适用情况 |
+|---|---|---|---|
+| Quarto book | 原生输出 EPUB、PDF、HTML、Word 等格式；EPUB 有封面、目录与 CSS 支持 | 一个章节源文件可输出成带搜索的书籍网站，交叉引用可连接章节、图和表 | 需要同时交付手机 EPUB、电脑网页和可维护分章源文件，本书采用 |
+| mdBook | 内置主要输出是 HTML 和 Markdown；EPUB 依赖社区渲染器插件 | 对 Rust 项目文档网站和章节导航很成熟 | 重点是在线开发手册、要与 Rust 文档风格一致时合适 |
+| Pandoc | 可以从 Markdown 直接转换 EPUB、HTML、PDF 等格式 | 转换能力强；成书导航和网站项目要自行设计编排 | 已有成熟 Markdown 书稿，只想转换或接入自定义出版流水线时合适 |
+| 手写 EPUB 打包脚本 | 可完全控制容器结构和元数据 | 目录、样式、封面适配都必须自己维护和验证 | EPUB 标准实验或特殊出版需求；普通技术书维护成本偏高 |
+
+Quarto 官方手册明确支持书籍项目、分章管理、HTML 与 EPUB 输出；mdBook 的内建 renderer 页面列出 HTML 与 Markdown，并将 EPUB 留给外部插件；Pandoc 的官方用户手册提供 EPUB writer。参考：[Quarto Books](https://quarto.org/docs/books/)、[Quarto EPUB format](https://quarto.org/docs/reference/formats/epub.html)、[mdBook renderers](https://rust-lang.github.io/mdBook/format/configuration/renderers.html)、[Pandoc EPUB documentation](https://pandoc.org/MANUAL.html#epub-options)。
+
+## 最终选择
+
+书稿采用 Quarto，内容按章节拆成 QMD 文件，输出 HTML 教材网站与 EPUB。页面共用定制 CSS，封面单独制作；来源、模块索引与命令表作为书内附录。这样读者手机上可以直接打开 EPUB，电脑上可以搜索 HTML，维护者又能在后续提交中只修改相关章节。

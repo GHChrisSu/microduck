@@ -1,0 +1,24 @@
+# 第十二章：强化学习仓库是怎样组织的
+
+microduck_rl/ 是策略的训练、验证、导出和发布工程。它面向 Python 3.12，使用 uv 管理环境，依赖 mjlab、MuJoCo Warp、BAM 和 PyTorch。训练路径默认需要 CUDA GPU；Mac 上可运行部分推理和仿真工具，但 MPS 可用不等于本地已经具备仓库声明的 CUDA 批量训练环境。
+
+## 主要目录
+
+- src/mjlab_microduck/robot/ 放 MJCF 机器人模型、任务常量和关节映射。
+- src/mjlab_microduck/actuator/ 放 BAM 执行器包装和参数随机化。
+- src/mjlab_microduck/tasks/ 放环境配置、MDP 奖励、重置、事件和任务注册。
+- src/mjlab_microduck/sim/ 放机器人 body server、相机和 ToF 的仿真服务端。
+- src/mjlab_microduck/export.py 与脚本目录负责检查点载入、策略演示、ONNX 导出。
+- src/mjlab_microduck/publish/ 负责发布清单、模型合同检查和仓库上传。
+
+这个结构让“物理模型”“要学的任务”“如何训练”“如何落地部署”互相可查，但可以单独修改。改相机背景不会改变步态奖励；改奖励不会自动改变导出格式。
+
+## 训练入口、运行器和记录
+
+命令行 train 将 task id 解析成 mjlab 环境配置与 PPO runner 配置，然后创建数千个并行环境，收集状态转移并更新网络。wandb 或本地日志记录奖励、存活率和动作表现，检查点可用于恢复训练与稍后导出。Play 使用已训练策略加载少量环境，让人直接观察行为。
+
+环境数量越大，GPU 计算与显存需求越高。README 中 4096 个并行环境和 1–2 小时“可用步态”是针对合适 CUDA 机器的经验，不是对所有机器的保证。没有兼容 GPU 时，仓库提供 Hugging Face Jobs 路径，把训练调度到远程 GPU，而不是要求本地 Mac 冒充训练节点。
+
+## 学习过程的正确问题
+
+训练结束不代表策略具备 sim2real 能力。需要检查训练回报是否代表任务成功、身体能否承受随机参数、失败姿态是否覆盖充分、导出后的 ONNX 是否通过运行时维度与数值检查。对双足机器人来说，“能在干净的理想模型中站起来”只证明任务简单实例已学会，不证明电池电压下降或齿轮间隙存在时仍可靠。

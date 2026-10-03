@@ -1,0 +1,40 @@
+# 第二章：Rust 运行时的工程地图
+
+microduck/Cargo.toml 把项目组织成一个 Cargo workspace。workspace 让多个 crate 共用依赖版本、版本号和构建命令，但每个 crate 仍有清楚的责任。理解边界时，先把它们分成守护进程、可复用库、工具和部署材料。
+
+## 守护进程：持续运行并拥有资源
+
+- robotd/ 拥有 50 Hz 运动循环、舵机总线访问、安全检查、策略推理、姿态与声音行为。它是控制权的中心。
+- mediad/ 拥有相机、麦克风、视频编码、WebRTC 会话和本机控制台。视频处理重、依赖平台媒体栈，因此独立于运动循环。
+- configd/ 管理网络配置、机器人身份、配对 PIN、重启和手柄配对。网络凭据实际由 NetworkManager 持有。
+- btd/ 是 BLE GATT 入口，把经过授权的蓝牙请求转成服务调用。
+- padd/ 读取 Linux 游戏手柄并提交控制意图。它作为普通客户端运行，不直接打开舵机总线。
+- updaterd/ 接收更新请求并驱动更新引擎。即使 robotd 出错，它也应该能负责恢复应用。
+- tof/ 中的 tofd 管理头部 8×8 深度传感器并发布帧；深度读取与运动控制不是一个权限边界。
+
+把这些程序拆开，不是为了制造“微服务”标签，而是为了隔离硬件所有权、故障域和系统权限。相机重启时，不应夺走控制循环正在用的舵机串口；更新器替换运行时程序时，也不能依赖正在被替换的 robotd 完成自己。
+
+## 库：实现机制，不负责启动程序
+
+| crate | 它负责什么 | 可从哪里继续读 |
+|---|---|---|
+| duck-ipc-proto | 服务间 JSON-RPC 方法、消息与路径合同 | duck-ipc-proto/src/lib.rs |
+| duck-control | 机器人模型、总线、IMU、观测、策略、安全和仿真 I/O | duck-control/src/ |
+| kinematics | MJCF 几何、正向运动学及头部、相机、手部坐标变换 | kinematics/src/ |
+| odometry | 结合脚底接触与 IMU 的局部位移估计 | odometry/src/ |
+| sounds | 声音合成、鸭子声音风格和合奏乐谱 | sounds/src/ |
+| pet-detect | 用麦克风信号识别抚摸头部一类声音事件 | pet-detect/src/ |
+| duck-detect | 运行时的鸭子视觉检测模型后端 | duck-detect/src/ |
+| robotd-params | robotd.toml 参数的结构、默认值、校验与编辑 | robotd-params/src/ |
+| duck-ble | BLE 广播、GATT 数据分帧和协议辅助 | duck-ble/src/ |
+| duck-ether | 仿真中替代群体 BLE 广播的可控虚拟无线链路 | duck-ether/src/ |
+| pad-imu | 手柄 IMU 方向与游戏手柄动作融合 | pad-imu/src/ |
+| uyvy | UYVY 相机像素格式处理 | uyvy/src/ |
+
+工具也有明确边界：robotctl/ 是板端命令行；duckctl/ 是电脑端 BLE 客户端；xtask/ 生成、签名、晋升发行包；test-support/ 为更新和签名测试提供夹具。这些工具不应该被打进机器人常驻服务。
+
+## 部署目录也是系统的一部分
+
+deploy/ 保存服务默认配置、更新信任锚与日志设置；hooks/ 保存安装前后脚本；scripts/ 负责板卡配置、开发推送、测试和交叉编译；docs/design/ 解释机制与边界；docs/robot/ 说明如何使用机器人。
+
+判断一段代码应该放哪里，可以问三件事：谁拥有这个资源？谁需要复用这个算法？进程退出时它必须由谁重启？如果答案分别是“唯一的服务”“多个客户端”“系统服务管理器”，通常就能看出应该是库、客户端还是守护进程。
