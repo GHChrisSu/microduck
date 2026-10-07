@@ -440,7 +440,7 @@ mode = "walk"
 # and drawing a 720p30 one in software cost five times what the camera it stands in for does.
 # source = "camera"
 
-# Frame size and rate, as one name: 1080p30, 720p30, 720p15 or 360p30.
+# Frame size and rate, as one name: 1080p30, 720p30, 720p15, 360p30 or 360p15.
 #
 # One key rather than a width, a height and an fps, because they do not vary independently — a
 # rung the capture path cannot produce is a mediad that will not start, and every rung here is
@@ -454,7 +454,7 @@ mode = "walk"
 # quality = "720p30"
 
 # Starting video bitrate, bits per second. Unset follows the quality — 4 Mb/s at 1080p30,
-# 2 Mb/s at 720p30, 1 Mb/s at 720p15, 800 kb/s at 360p30 — which is what almost every robot
+# 2 Mb/s at 720p30, 1 Mb/s at 720p15, 800 kb/s at 360p30, 400 kb/s at 360p15 — which is what almost every robot
 # wants. webrtcsink's congestion control moves from here, so it is a starting point rather than
 # a ceiling. The unit is bits: 2 Mb/s is 2000000, and a value below 100000 is refused as
 # somebody who meant kilobits.

@@ -122,6 +122,9 @@ Cameras are opt-in per duck (`a`, `a,c`, or `all`) because a rendered frame cost
 with a camera gets its own `mediad`, and its console is served at `http://127.0.0.1:8080`, `8081`,
 ... by index, exactly the page a robot serves.
 
+For the interactive arrow-key person, local Chinese wake-word recognition, and staged owner search, see the
+[voice-triggered owner-search tutorial](../tutorials/voice-triggered-owner-search.zh-CN.md).
+
 ## Reaching it from anywhere
 
 A simulated duck signs in to a Hugging Face account and appears in that account's robot list, the
@@ -164,6 +167,8 @@ Environment variables, all optional:
 | `DUCK_SIM_DUCKS` | `1` | How many ducks; `boot N` sets it too. |
 | `DUCK_SIM_SCENE` | bare floor | A scene name (`apartment`) or a path. |
 | `DUCK_SIM_CAMERAS` | none | Which ducks render a camera: `a`, `a,c`, `all`. |
+| `DUCK_SIM_CAMERA_FPS` | `30` (`find` uses `15`) | Camera render and matching stream rate: `15` or `30`. |
+| `DUCK_SIM_VIEWER_FPS` | `30` (`find` uses `15`) | Visible MuJoCo refresh target: `15`, `25`, `30` or `50`; does not change the 50 Hz robot loop. |
 | `DUCK_SIM_DUCK` | `duck-a` | Which duck `ctl` and `monitor` talk to. |
 | `DUCK_SIM_KEYFRAME` | `SIT` | Where a duck starts: `SIT` folded on the floor (the standing policy rises from it), `HOME`, `STAND`, `FOLD`. |
 | `DUCK_SIM_VIEWER` | `1` | `0` runs MuJoCo headless. |

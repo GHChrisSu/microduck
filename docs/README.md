@@ -11,6 +11,8 @@ For a guided route through the project, see the [MicroDuck mobile learning book]
 
 For a code-level walkthrough of the current YOLO follow behaviour-cloning example, see the [follow-policy tutorial](tutorials/follow-policy-code-tour.zh-CN.md).
 
+To run the interactive voice-triggered owner-search simulation, see the [voice-follow tutorial](tutorials/voice-triggered-owner-search.zh-CN.md).
+
 It is also where a **publisher** starts: [`policy-manifest.md`](policy-manifest.md) is the
 contract for a `manifest.json` beside a microduck `.onnx`, and it owns every field. The design
 docs give the reasoning and point at it.

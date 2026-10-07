@@ -69,6 +69,8 @@ SCENE="${DUCK_SIM_SCENE:-}"
 # 8080 + its index.
 CAMERAS="${DUCK_SIM_CAMERAS:-}"
 FRAME_PORT="${DUCK_SIM_FRAME_PORT:-7901}"
+CAMERA_FPS="${DUCK_SIM_CAMERA_FPS:-30}"
+VIEWER_FPS="${DUCK_SIM_VIEWER_FPS:-30}"
 MOVE_TARGET="${DUCK_SIM_MOVE_TARGET:-}"
 TARGET_MOTION_AMPLITUDE="${DUCK_SIM_TARGET_MOTION_AMPLITUDE:-1.2}"
 TARGET_MOTION_PERIOD="${DUCK_SIM_TARGET_MOTION_PERIOD:-12}"
@@ -230,6 +232,14 @@ policies() {
 }
 
 up() {
+    case "$CAMERA_FPS" in
+        15|30) ;;
+        *) die "DUCK_SIM_CAMERA_FPS must be 15 or 30" ;;
+    esac
+    case "$VIEWER_FPS" in
+        15|25|30|50) ;;
+        *) die "DUCK_SIM_VIEWER_FPS must be 15, 25, 30 or 50" ;;
+    esac
     [ -d "$RL" ] || die "no simulator at $RL. It is the microduck_rl repo — set DUCK_SIM_RL."
     [ -x "$RL/.venv/bin/python" ] || die "$RL has no .venv. Run \`uv sync\` there first."
     # `.so.<version>` on Linux, `.<version>.dylib` on macOS — the wheel names it after the platform
@@ -478,7 +488,7 @@ WHY
             # from this branch, and off Linux it may be one built without the feature.
             # shellcheck disable=SC2086
             (cd "$REPO" && cargo build --quiet -p mediad $mediad_features)
-            printf '[media]\nquality = "360p30"\n' > "$STATE/mediad-$name.toml"
+            printf '[media]\nquality = "360p%s"\n' "$CAMERA_FPS" > "$STATE/mediad-$name.toml"
             DUCK_RUNTIME_DIR="$STATE" RUST_LOG="${RUST_LOG:-info}" \
                 $SETSID nohup "$REPO/target/debug/mediad" \
                 --sim-camera "127.0.0.1:$((FRAME_PORT + i))" \
@@ -636,10 +646,14 @@ start_body() {
     [ -d "$RL" ] || die "no simulator at $RL. It is the microduck_rl repo — set DUCK_SIM_RL."
     [ -x "$RL/.venv/bin/python" ] || die "$RL has no .venv. Run \`uv sync\` there first."
     mkdir -p "$STATE"
-    say "starting the body from $RL — a MuJoCo window should open"
     # `DUCK_SIM_VIEWER=0` for a window-less run: watching costs frames, and the daemon's loop is
     # wall-clock, so a simulator that cannot keep up is a robot that cannot balance.
     [ "${DUCK_SIM_VIEWER:-1}" = 0 ] && HEADLESS=--headless || HEADLESS=
+    if [ -n "$HEADLESS" ]; then
+        say "starting the body from $RL in headless mode"
+    else
+        say "starting the body from $RL — a MuJoCo window should open"
+    fi
     # **The viewer needs `mjpython` on macOS.** MuJoCo's passive viewer has to own the main thread
     # and the Cocoa event loop, so `launch_passive` refuses under a plain interpreter — the body
     # server catches that and runs headless, which is a window that never opens and no error to
@@ -664,16 +678,13 @@ start_body() {
     # when a camera was actually requested, so asking for one against such a build still fails,
     # loudly and about the thing that is missing.
     #
-    # **And `--camera-fps`, because the two ends have to agree on it.** `mediad` is configured with
-    # the `360p30` rung and meters what arrives against it; the renderer's own default is 15, to
-    # halve the cost of something nobody is watching. Left alone, every simulated duck with an eye
-    # logs "capture is below its target rate" forever — a warning that means nothing, on the one
-    # line that would mean something if the simulator really were falling behind. 30 costs about a
-    # third of a core per camera, which is the trade `DUCK_SIM_CAMERAS` already exists to let you
-    # decline.
+    # **`--camera-fps` and the matching media rung move together.** A normal camera session uses
+    # 360p30. The person-following scene defaults to 360p15: its detector only needs 5 Hz, and
+    # reducing the offscreen render load leaves more time for the visible MuJoCo window. Set
+    # `DUCK_SIM_CAMERA_FPS=30` to restore the full camera rate.
     cam_args=""
     if [ -n "$CAMERAS" ]; then
-        cam_args="--cameras $CAMERAS --frame-port $FRAME_PORT --camera-fps 30"
+        cam_args="--cameras $CAMERAS --frame-port $FRAME_PORT --camera-fps $CAMERA_FPS"
     fi
     target_args=""
     if [ -n "$MOVE_TARGET" ]; then
@@ -685,10 +696,17 @@ start_body() {
                 --target-motion-lateral-amplitude $TARGET_MOTION_LATERAL_AMPLITUDE"
         fi
     fi
+    interactive_args=""
+    if [ "${DUCK_SIM_INTERACTIVE_TARGET:-0}" = 1 ]; then
+        interactive_args="--interactive-target --voice-trigger-port $((FRAME_PORT + 1)) \
+            --voice-status-port $((FRAME_PORT + 2)) \
+            --interactive-target-behind-m ${DUCK_SIM_PERSON_BEHIND_M:-0}"
+    fi
     # shellcheck disable=SC2086
     $SETSID nohup "$PY_BIN" -m mjlab_microduck.sim.body_server \
-        --port "$PORT" --ducks "$DUCKS" --keyframe "${DUCK_SIM_KEYFRAME:-SIT}" $HEADLESS $scene_arg \
-        $cam_args $target_args \
+        --port "$PORT" --ducks "$DUCKS" --keyframe "${DUCK_SIM_KEYFRAME:-SIT}" \
+        --viewer-fps "$VIEWER_FPS" $HEADLESS $scene_arg \
+        $cam_args $target_args $interactive_args \
         > "$STATE/body.log" 2>&1 &
     echo $! > "$STATE/body.pid"
     if ! wait_for_port; then
@@ -784,6 +802,8 @@ follow() {
     # scene, then keep the camera-driven controller running until the user interrupts it.
     SCENE=approach
     CAMERAS=a
+    CAMERA_FPS="${DUCK_SIM_CAMERA_FPS:-15}"
+    VIEWER_FPS="${DUCK_SIM_VIEWER_FPS:-15}"
     MOVE_TARGET=follow_person
     TARGET_MOTION_SPEED="${DUCK_SIM_TARGET_MOTION_SPEED:-0.10}"
     DUCK_SIM_KEYFRAME=HOME
@@ -805,6 +825,71 @@ follow() {
             --stop-area 0.06 --stop-height 0.45 --search-yaw 0.30 \
             --search-leg-seconds 2.5 --search-pause-seconds 0.45
     fi
+}
+
+find_person() {
+    # Local Whisper listens for the wake word and for the command that follows it; only the
+    # transcript goes to the Responses API.
+    SCENE=approach
+    CAMERAS=a
+    MOVE_TARGET=follow_person
+    TARGET_MOTION_SPEED="${DUCK_SIM_TARGET_MOTION_SPEED:-0.10}"
+    DUCK_SIM_PERSON_BEHIND_M="${DUCK_SIM_PERSON_BEHIND_M:-3.8}"
+    DUCK_SIM_INTERACTIVE_TARGET=1
+    DUCK_SIM_KEYFRAME=HOME
+    export DUCK_SIM_INTERACTIVE_TARGET DUCK_SIM_PERSON_BEHIND_M DUCK_SIM_KEYFRAME
+
+    # The Agent reads its provider settings from Codex config. Keep the shell key only for
+    # the controller process; do not pass it to simulator daemons.
+    RESPONSES_AGENT_API_KEY="${OPENAI_API_KEY:-}"
+    unset OPENAI_API_KEY
+
+    WHISPER_BIN="${DUCK_SIM_WHISPER_CLI:-whisper-cli}"
+    if ! command -v "$WHISPER_BIN" >/dev/null 2>&1; then
+        die "whisper-cli is required for local wake-word detection (macOS: brew install whisper-cpp)"
+    fi
+    ASR_MODEL="${DUCK_SIM_ASR_MODEL:-$STATE/speech/ggml-small-q5_1.bin}"
+    if [ ! -f "$ASR_MODEL" ]; then
+        mkdir -p "$(dirname "$ASR_MODEL")"
+        say "downloading the local Chinese wake-word model (about 181 MiB)"
+        curl -fL --retry 3 \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin?download=true" \
+            -o "$ASR_MODEL.part" || die "could not download the offline speech model"
+        mv "$ASR_MODEL.part" "$ASR_MODEL"
+        if [ -z "${DUCK_SIM_ASR_MODEL:-}" ]; then
+            ASR_SHA="$(shasum -a 1 "$ASR_MODEL" | awk '{print $1}')"
+            if [ "$ASR_SHA" != "6fe57ddcfdd1c6b07cdcc73aaf620810ce5fc771" ]; then
+                rm -f "$ASR_MODEL"
+                die "downloaded speech model checksum did not match"
+            fi
+        fi
+    fi
+
+    say "starting the Responses API voice Agent; say 小鸭, then a command"
+    up
+    FOLLOW_POLICY="${DUCK_SIM_FOLLOW_POLICY:-$STATE/follow-training/follow-policy.ts}"
+    controller_args="--target person --rotate 0 --drive --seconds 0 --max-forward 0.40 \
+        --wait-for-trigger --search-style staged --voice-trigger-port $((FRAME_PORT + 1)) \
+        --voice-status-port $((FRAME_PORT + 2)) \
+        --look-height 0.70 --confidence 0.04 \
+        --stop-area 0.06 --stop-height 0.45 --search-yaw 0.95 --search-forward 0.25 \
+        --head-search-seconds 1.8 --search-leg-seconds 1.8 --search-pause-seconds 0.25 \
+        --agent-provider responses-api"
+    if [ -f "$FOLLOW_POLICY" ]; then
+        say "using learned follow policy $FOLLOW_POLICY"
+        # shellcheck disable=SC2086
+        OPENAI_API_KEY="$RESPONSES_AGENT_API_KEY" \
+            "$RL/.venv/bin/python" "$REPO/scripts/duck_vision_follow.py" $controller_args \
+            --whisper-cli "$WHISPER_BIN" --asr-model "$ASR_MODEL" --wake-word "小鸭" \
+            --policy "$FOLLOW_POLICY" \
+            --policy-forward-scale "${DUCK_SIM_FOLLOW_POLICY_FORWARD_SCALE:-1.25}"
+    else
+        # shellcheck disable=SC2086
+        OPENAI_API_KEY="$RESPONSES_AGENT_API_KEY" \
+            "$RL/.venv/bin/python" "$REPO/scripts/duck_vision_follow.py" $controller_args \
+            --whisper-cli "$WHISPER_BIN" --asr-model "$ASR_MODEL" --wake-word "小鸭"
+    fi
+    unset RESPONSES_AGENT_API_KEY
 }
 
 # ── the container ─────────────────────────────────────────────────────────────
@@ -1158,6 +1243,7 @@ case "${1:-up}" in
     shell)   shift; shell "$@" ;;
     down)    down_containers; down ;;
     follow)  follow ;;
+    find)    find_person ;;
     drive)   shift; drive "$@" ;;
     ctl)     shift; ctl "$@" ;;
     stand)   stand && sleep 6 && upright ;;
@@ -1166,5 +1252,5 @@ case "${1:-up}" in
     log)     tail -f "$STATE/robotd.log" ;;
     simlog)  tail -f "$STATE/body.log" ;;
     realtime) realtime ;;
-    *)       die "unknown command '$1'. Try: up, follow, boot, shell, down, stand, drive, monitor, ctl, log, simlog, status, realtime" ;;
+    *)       die "unknown command '$1'. Try: up, follow, find, boot, shell, down, stand, drive, monitor, ctl, log, simlog, status, realtime" ;;
 esac

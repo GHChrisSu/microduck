@@ -93,7 +93,7 @@ What the stream is — camera or test pattern, frame size, rate, bitrate — is 
 configure` edits it and offers the `systemctl restart mediad` it needs; `mediad` reads it once at
 startup, like every other daemon here reads its config.
 
-**One `quality` key naming a rung — `1080p30`, `720p30`, `720p15`, `360p30` — rather than a width,
+**One `quality` key naming a rung — `1080p30`, `720p30`, `720p15`, `360p30`, `360p15` — rather than a width,
 a height and an fps.** Those three do not vary independently: a combination the capture path
 cannot produce is a pipeline that does not start, and that costs the *control* channel along with
 the video, because the datachannel is bundled with the video track (§2). Every rung is 16:9, the

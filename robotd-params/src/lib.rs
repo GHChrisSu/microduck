@@ -229,21 +229,25 @@ pub enum Quality {
     /// Small and cheap, for a bad link or a busy CPU.
     #[serde(rename = "360p30")]
     Q360p30,
+    /// Same small picture at half the frame rate, for a simulator or busy CPU.
+    #[serde(rename = "360p15")]
+    Q360p15,
 }
 
 /// Every mode, in the order an editor cycles them — and the strings the file uses.
 ///
 /// One list, so the registry's choices, the file's values and [`Quality`] itself cannot disagree;
 /// [`tests::every_quality_label_round_trips`] pins it to the enum in both directions.
-pub const QUALITY_LABELS: &[&str] = &["1080p30", "720p30", "720p15", "360p30"];
+pub const QUALITY_LABELS: &[&str] = &["1080p30", "720p30", "720p15", "360p30", "360p15"];
 
 impl Quality {
     /// The modes, in [`QUALITY_LABELS`] order.
-    pub const ALL: [Quality; 4] = [
+    pub const ALL: [Quality; 5] = [
         Quality::Q1080p30,
         Quality::Q720p30,
         Quality::Q720p15,
         Quality::Q360p30,
+        Quality::Q360p15,
     ];
 
     /// The name this mode has in the file.
@@ -253,6 +257,7 @@ impl Quality {
             Quality::Q720p30 => "720p30",
             Quality::Q720p15 => "720p15",
             Quality::Q360p30 => "360p30",
+            Quality::Q360p15 => "360p15",
         }
     }
 
@@ -262,7 +267,7 @@ impl Quality {
         match self {
             Quality::Q1080p30 => (1920, 1080),
             Quality::Q720p30 | Quality::Q720p15 => (1280, 720),
-            Quality::Q360p30 => (640, 360),
+            Quality::Q360p30 | Quality::Q360p15 => (640, 360),
         }
     }
 
@@ -276,7 +281,7 @@ impl Quality {
 
     pub fn fps(self) -> u32 {
         match self {
-            Quality::Q720p15 => 15,
+            Quality::Q720p15 | Quality::Q360p15 => 15,
             _ => 30,
         }
     }
@@ -293,6 +298,7 @@ impl Quality {
             Quality::Q720p30 => 2_000_000,
             Quality::Q720p15 => 1_000_000,
             Quality::Q360p30 => 800_000,
+            Quality::Q360p15 => 400_000,
         }
     }
 }

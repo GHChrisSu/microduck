@@ -155,7 +155,7 @@ reference for *why* each knob exists; this is for flipping them.
 sudo robotctl configure
 ```
 
-Set `media.quality` — `1080p30`, `720p30`, `720p15` or `360p30` — and take the restart it
+Set `media.quality` — `1080p30`, `720p30`, `720p15`, `360p30` or `360p15` — and take the restart it
 offers. `media.source` set to `test` streams a test pattern instead, which is what a board with
 no camera
 wants: the WebRTC *control* channel rides on the video track, so a pipeline that cannot start
@@ -1188,4 +1188,3 @@ eval "$(robotctl completions bash)"
 ```
 
 `zsh`, `fish`, `elvish` and `powershell` work in place of `bash`.
-
